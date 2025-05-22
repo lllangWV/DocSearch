@@ -189,6 +189,7 @@ dev_scripts/
 
 /papers/
 
+_version.py
 sphinx/_build/
 
 .env
