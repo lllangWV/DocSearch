@@ -6,7 +6,6 @@ import matplotlib.pyplot as plt
 import tiktoken
 
 
-
 def plot_character_distribution(pdfs_dirs, bins=20, filename=None):
     
     character_lengths=[]
