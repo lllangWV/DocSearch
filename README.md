@@ -1,6 +1,6 @@
 # DocSearch
 
-DocumentRAG is an advanced document search and retrieval system that leverages Retrieval-Augmented Generation (RAG) to provide intelligent natural language search capabilities across PDF document collections. This system combines sophisticated PDF processing, vector embeddings, and large language models to enable semantic understanding of document content and context-aware responses to complex queries.
+DocSearch is an advanced document search and retrieval system that leverages Retrieval-Augmented Generation (RAG) to provide intelligent natural language search capabilities across PDF document collections. This system combines sophisticated PDF processing, vector embeddings, and large language models to enable semantic understanding of document content and context-aware responses to complex queries.
 
 
 ## Key Features
@@ -16,8 +16,6 @@ DocumentRAG is an advanced document search and retrieval system that leverages R
 ```bash
 pip install docsearch
 ```
-
-
 
 ## Contributing
 
