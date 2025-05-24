@@ -1,229 +1,404 @@
-from enum import Enum
-import os
+import copy
 import json
+import logging
+import os
 import shutil
-from dotenv import load_dotenv
+from dataclasses import asdict, dataclass
+from enum import Enum
 from glob import glob
+from io import BytesIO
+from pathlib import Path
+from typing import Dict, List, Optional, Tuple, TypedDict, Union
 
+import numpy as np
 import PyPDF2
+from dotenv import load_dotenv
 from pdf2image import convert_from_path
-import numpy as np  
+from PIL import Image
 
-from image_processing import extract_text_from_image
+from docsearch.image_processing import encode_image, extract_text_from_image
+from docsearch.utils.log_utils import set_verbose_level
+
+logger = logging.getLogger(__name__)
 
 load_dotenv()
 
 
 class PDFExtractionMethods(Enum):
-    TEXT_THEN_LLM='text_then_llm'
-    LLM='llm'
+    """Enumeration of available PDF extraction methods."""
 
+    TEXT_THEN_LLM = "text_then_llm"
+    LLM = "llm"
 
     @classmethod
-    def list_modes(cls):
-        return ', '.join([mode.name for mode in cls])
-    
+    def list_modes(cls) -> str:
+        """
+        List all available extraction modes.
+
+        Returns
+        -------
+        str
+            Comma-separated string of available extraction modes.
+        """
+        return ", ".join([mode.value for mode in cls])
+
+
+@dataclass
+class PDFMetadata:
+    """
+    Schema for the PDF metadata.
+
+    Attributes
+    ----------
+    pdf_name : str
+        Name of the PDF file without extension
+    pdf_rel_path : str
+        Relative path to the PDF file
+    num_pages : int
+        Total number of pages in the PDF
+    image_prompt : str
+        Prompt used for LLM image processing
+    """
+
+    pdf_name: str
+    pdf_rel_path: str
+    num_pages: int
+    error_reading_pdf: bool = False
+    image_prompt: str = ""
+
+    def to_dict(self) -> Dict:
+        return asdict(self)
+
+
+@dataclass
+class PDFPageMetadata:
+    """
+    Defines the PDF page metadata.
+
+    Attributes
+    ----------
+    page_number : int
+        Page number (1-indexed)
+    process_as_image : bool
+        Whether this page was processed using LLM image analysis
+    has_images : bool
+        Whether the page contains embedded images
+    has_text : bool
+        Whether the page has extractable text
+    """
+
+    page_num: int
+    processed_as_image: bool = False
+    has_images: bool = False
+    has_text: bool = True
+    error_extracting_text: bool = False
+
+    def to_dict(self) -> Dict:
+        return asdict(self)
+
+
+@dataclass
+class PDFPage:
+    """
+    Defines the PDF page data.
+
+    Attributes
+    ----------
+    text : str
+        Extracted text content from the page
+    metadata : PDFPageMetadata
+        Page-specific metadata
+    image : Optional[bytes]
+        Page image as bytes (PNG format)
+    """
+
+    text: str
+    metadata: PDFPageMetadata
+    image: Optional[bytes] = None
+
+    def to_dict(self) -> Dict:
+        return asdict(self)
+
+
+@dataclass
+class PDF:
+    """
+    Defines the PDF data.
+
+    Attributes
+    ----------
+    metadata : PDFMetadata
+        PDF-level metadata
+    pages : List[PDFPage]
+        List of page objects containing text and metadata
+    """
+
+    metadata: PDFMetadata
+    pages: List[PDFPage]
+
+    def to_dict(self) -> Dict:
+        return asdict(self)
+
 
 class PDFProcessor:
-    def __init__(self, output_dir='', model='gpt-4o-mini', max_tokens=1000):
-        
-        self.output_dir=output_dir
-        self.model=model
-        self.max_tokens=max_tokens
+    """
+    A class for processing PDF files and extracting text content.
 
-    def process(self, path, method='llm', **kwargs):
-        extraction_modes=PDFExtractionMethods.list_modes()
+    This class provides functionality to extract text from PDF files using
+    different methods including LLM-based extraction and traditional text
+    extraction with LLM fallback. Processing and exporting are separated
+    to allow flexible output options. Uses dataclasses for structured data.
+
+    Parameters
+    ----------
+    model : str, optional
+        LLM model to use for text extraction, by default "gpt-4o-mini"
+    max_tokens : int, optional
+        Maximum number of tokens for LLM processing, by default 1000
+    verbose : int, optional
+        Verbosity level, by default 1
+    """
+
+    def __init__(
+        self, model: str = "gpt-4o-mini", max_tokens: int = 1000, verbose: int = 1
+    ) -> None:
+        set_verbose_level(verbose)
+        self.verbose = verbose
+
+        self.model = model
+        self.max_tokens = max_tokens
+        self.pdf_data: Optional[PDF] = None
+
+        if self.verbose == 1:
+            print(f"verbose level: {self.verbose}")
+            print(f"Extraction methods:")
+            print(
+                f"'llm': Process all pages using LLM. This means extract information by processing the pages as images and then using llm for text extraction."
+            )
+            print(
+                f"'text_then_llm': Process all pages using text extraction first, then LLM for problematic pages."
+            )
+
+    def process(self, path: Union[str, Path], method: str = "llm") -> PDF:
+        """
+        Process a PDF file using the specified extraction method.
+
+        Parameters
+        ----------
+        path : Union[str, Path]
+            Path to the PDF file to process
+        method : str, optional
+            Extraction method to use ('llm' or 'text_then_llm'), by default "llm"
+
+        Returns
+        -------
+        PDF
+            PDF dataclass containing extracted text and metadata
+
+        Raises
+        ------
+        ValueError
+            If an invalid extraction method is provided
+        """
+        extraction_modes = [mode.value for mode in PDFExtractionMethods]
         if method not in extraction_modes:
-            raise ValueError(f"Invalid extraction method: {method}. Valid methods are: {extraction_modes}")
+            raise ValueError(
+                f"Invalid extraction method: {method}. Valid methods are: {extraction_modes}"
+            )
 
-        # Creating the pdf save directory
-        filename=os.path.basename(path)
-        filename=PDFProcessor.fix_filename(filename)
+        self.method = method
 
-        # Setting up pdf save directory
-        pdf_save_dir=os.path.join(self.output_dir,filename)
-        pdf_image_dir=os.path.join(pdf_save_dir,'images')
-        if os.path.exists(pdf_save_dir):
-            return None
+        path = Path(path)
 
-        # Extracting image from pdf
-        if not os.path.exists(pdf_image_dir):
-            PDFProcessor._extract_images_from_pdf(path=path, pdf_image_dir=pdf_image_dir, **kwargs)
-        
-        
-        # Extarcting information from pdf
-        if method == PDFExtractionMethods.LLM.value:
-           pdf_dict=self._llm_processing(path=path, pdf_image_dir=pdf_image_dir)
-        elif method == PDFExtractionMethods.TEXT_THEN_LLM.value:
-            pdf_dict=self._text_then_llm_processing(path=path, pdf_image_dir=pdf_image_dir)
+        logger.info(f"Processing PDF: {path}")
 
-        self._save_dict(path=os.path.join(pdf_save_dir,'pdf_info.json'), pdf_dict=pdf_dict)
-        return None
-    
-    def _llm_processing(self, path, pdf_image_dir):
-        image_paths=glob(os.path.join(pdf_image_dir,'*.png'))
+        # Extract images from PDF
+        page_images = self.extract_images(path)
 
-        # Creating dict to save processed information
-        n_pages=len(image_paths)
-        pdf_dict=self._construct_storage_dict(n_pages=n_pages)
-        pdf_dict['metadata']['pdf_name']=os.path.basename(path).split('.')[0]
-        pdf_dict['metadata']['pdf_path']=path
+        with open(path, "rb") as pdf_stream:
+            self._pdf_stream = pdf_stream
 
-        for image_path in image_paths:
-            image_name=os.path.basename(image_path)
-            page_number=int(image_name.split('.')[0].split('_')[-1])
-            prompt_and_response=extract_text_from_image(image_path, 
-                                                    model=self.model,
-                                                    max_tokens=self.max_tokens,
-                                                    image_type='png')
+            pdf_pages = []
+            for i_page, page_image in enumerate(page_images):
+                pdf_page = self._process_page(i_page, page_image)
+                pdf_pages.append(pdf_page)
 
-            pdf_dict['pages'][f'page_{page_number}']['text']+=prompt_and_response[1]
-            pdf_dict['metadata']['image_prompt']=prompt_and_response[0]
-        return pdf_dict
-    
-    def _text_then_llm_processing(self, path, pdf_image_dir):
-        pages_info=PDFProcessor._extract_information_from_pdf(path)
+            pdf_metadata = PDFMetadata(
+                pdf_name=path.stem,
+                pdf_rel_path=str(path),
+                num_pages=len(pdf_pages),
+                error_reading_pdf=self.error_reading_pdf,
+            )
+            self.pdf_data = PDF(metadata=pdf_metadata, pages=pdf_pages)
 
-        # Creating dict to save processed information
-        pdf_dict=PDFProcessor._construct_storage_dict(n_pages=pages_info['metadata']['num_pages'])
-        pdf_dict['metadata']['pdf_name']=os.path.basename(path).split('.')[0]
-        pdf_dict['metadata']['pdf_path']=path
+        return self.pdf_data
 
-        # Puting page information into the proper storage dict
-        for key, page_dict in pages_info['pages'].items():
-            pdf_dict['pages'][key]=page_dict
+    def _process_page(self, i_page: int, page_image: Image.Image) -> None:
+        """
+        Process a page image and extract text.
 
-            if page_dict['process_as_image']:
-                
-                image_path=os.path.join(pdf_image_dir,f'{key}.png')
-                prompt_and_response=extract_text_from_image(image_path, 
-                                                    model=self.model,
-                                                    max_tokens=self.max_tokens,
-                                                    image_type='png')
-                pdf_dict['pages'][key]['text']+=prompt_and_response[1]
-                pdf_dict['metadata']['image_prompt']=prompt_and_response[0]
+        Parameters
+        ----------
+        i_page : int
+            Page number (1-indexed)
+        page_image : Image.Image
+            Page image as PIL Image object
 
-        return pdf_dict
-    
-    @staticmethod
-    def _extract_images_from_pdf(path, pdf_image_dir, **kwargs):
-        os.makedirs(pdf_image_dir, exist_ok=True)
-        images=PDFProcessor._convert_pdf_to_images(path, dpi=kwargs.get('dpi',300))
-
-        for i_page, image in enumerate(images):
-            image_path=os.path.join(pdf_image_dir,f'page_{i_page+1}.png')
-            PDFProcessor._save_image(image_path,image)
-
-    @staticmethod
-    def _extract_information_from_pdf( path):
+        Returns
+        -------
+        PDFPage
+            PDF page dataclass containing text and metadata
+        """
+        self.error_reading_pdf = False
         try:
-            with open(path, 'rb') as file:
-                reader = PyPDF2.PdfReader(file)
-                num_pages = len(reader.pages)
+            pdf_reader = PyPDF2.PdfReader(self._pdf_stream)
 
-                pages_info={'metadata':{'pdf_path':path, 'num_pages':num_pages},
-                            'pages':{} }
-                for page_num in range(num_pages):
-                    
-                    page = reader.pages[page_num]
+            page = pdf_reader.pages[i_page]
 
-                    # Gets text fromt the page
-                    page_text=page.extract_text()
+            page_text = page.extract_text()
 
-                    # Check for images in the page
-                    try:
-                        images=page.images
-                    except:
-                        images=[]
+            # Check for images in the page
+            has_images = page.images is not None and len(page.images) > 0
 
-                    # This is for when pa file whcih are presentation style pages are present
-                    resources=page['/Resources']
-                    is_a_pa_attachment=False
-                    if '/XObject' in resources:
-                        xobjects = page['/Resources']['/XObject']
-                        is_a_pa_attachment=True
-                    
-                    process_as_image=False
-                    if (is_a_pa_attachment or len(images)>0 or len(page_text)==0):
-                        process_as_image = True
+            # Check for presentation-style pages with XObjects
+            resources = page["/Resources"]
+            is_a_pa_attachment = False
+            if "/XObject" in resources:
+                xobjects = page["/Resources"]["/XObject"]
+                is_a_pa_attachment = True
 
-                    pages_info['pages'][f'page_{page_num+1}']={
-                                                'text':page_text,
-                                                'process_as_image':process_as_image,
-                                                }
+            process_as_image = False
+            if is_a_pa_attachment or has_images or len(page_text) == 0:
+                process_as_image = True
 
-        except PyPDF2.errors.PdfReadError as e:
-            print(f"Error reading PDF: {e}")
-            return None
-        
-        return pages_info
-    
-    @staticmethod
-    def fix_filename(filename):
-        # Removing bad characters
-        n_dot = filename.count('.')
-        if n_dot < 2:
-            filename=filename.split('.')[0]
+        except Exception as e:
+            logger.error(f"Error processing page: {e}")
+            process_as_image = True
+            self.error_reading_pdf = True
+
+        if self.method == PDFExtractionMethods.LLM.value:
+            image_prompt, page_text, error_extracting_text = self._process_page_llm(
+                page_image
+            )
+
+        elif self.method == PDFExtractionMethods.TEXT_THEN_LLM.value:
+            page_text = page.extract_text()
+            if self.error_reading_pdf or process_as_image:
+                image_prompt, llm_page_text, error_extracting_text = (
+                    self._process_page_llm(page_image)
+                )
+                page_text += llm_page_text
         else:
-            filename=filename.replace('.', '',1).split('.')[0]
+            raise ValueError(f"Invalid extraction method: {self.method}")
 
-        filename=filename.replace('%', '_').replace('(', '').replace(')', '').strip()
-        return filename
-    
-    @staticmethod
-    def _construct_storage_dict(n_pages):
-        pdf_dict={}
-        pdf_dict['metadata']={'pdf_name':'',
-                              'pdf_path':'',
-                              'num_pages':n_pages,
-                              'image_prompt':''
-                              }
-        pdf_dict['pages']={}
-        for i_page in range(n_pages):
-            pdf_dict['pages'][f'page_{i_page+1}']={'text':'',
-                                                   'process_as_image':False}
+        has_text = len(page_text) > 0
 
-        return pdf_dict
-    
-    @staticmethod
-    def _save_dict(path, pdf_dict):
-        with open(path, 'w') as f:
-            json.dump(pdf_dict, f)
-        return None
-    
-    @staticmethod
-    def _convert_pdf_to_images(path, dpi=300):
+        page_metadata = PDFPageMetadata(
+            page_num=i_page,
+            processed_as_image=process_as_image,
+            has_images=has_images,
+            has_text=has_text,
+            error_extracting_text=error_extracting_text,
+        )
+
+        page = PDFPage(
+            text=page_text,
+            image=page_image,
+            metadata=page_metadata,
+        )
+
+        return page
+
+    def _process_page_llm(self, page_image: Image.Image) -> None:
+        prompt_and_response = None
+        image_prompt = ""
+        page_text = ""
+        error_extracting_text = False
+        try:
+            prompt_and_response = extract_text_from_image(
+                page_image,
+                model=self.model,
+                max_tokens=self.max_tokens,
+                image_type="png",
+            )
+        except Exception as e:
+            logger.error(f"Error extracting text from image: {e}")
+            error_extracting_text = True
+
+        if prompt_and_response is not None:
+            image_prompt = prompt_and_response[0]
+            page_text = prompt_and_response[1]
+
+        return image_prompt, page_text, error_extracting_text
+
+    def extract_images(
+        self,
+        path: Union[str, Path],
+        dpi: int = 300,
+        out_dir: Optional[Union[str, Path]] = None,
+    ) -> List[PDFPage]:
+        """
+        Extract images from PDF pages.
+
+        Parameters
+        ----------
+        path : Union[str, Path]
+            Path to the PDF file
+        dpi : int, optional
+            Resolution for image conversion, by default 300
+        out_dir : Optional[Union[str, Path]], optional
+            Directory to save the images, by default None
+
+        Returns
+        -------
+        List[Image.Image]
+            List of PIL Image objects, one per page
+        """
+        path = Path(path)
+        logger.info(f"Extracting images from PDF: {path}")
+
         images = convert_from_path(path, dpi=dpi)
-        return images
-    
+        image_bytes_list = []
+
+        for image in images:
+            image_bytes_list.append(encode_image(image, format="PNG"))
+
+        if out_dir is not None:
+            out_dir = Path(out_dir)
+            out_dir.mkdir(parents=True, exist_ok=True)
+            for i_page, image in enumerate(images):
+                image.save(out_dir / f"page_{i_page+1}.png", "PNG")
+        return image_bytes_list
+
+    def to_json(self, filepath: Union[str, Path]) -> None:
+        """
+        Convert the PDF data to a JSON file.
+        """
+        filepath = Path(filepath)
+        with open(filepath, "w", encoding="utf-8") as f:
+            json.dump(self.pdf_data.to_dict(), f, indent=2)
+
     @staticmethod
-    def _save_image(path:str, image:np.ndarray):
-        image.save(path, 'PNG')
+    def fix_filename(filename: str) -> str:
+        """
+        Clean and fix problematic characters in filenames.
 
-    
+        Parameters
+        ----------
+        filename : str
+            Original filename to clean
 
+        Returns
+        -------
+        str
+            Cleaned filename suitable for filesystem use
+        """
+        # Removing bad characters
+        n_dot = filename.count(".")
+        if n_dot < 2:
+            filename = filename.split(".")[0]
+        else:
+            filename = filename.replace(".", "", 1).split(".")[0]
 
-if __name__ == "__main__":
-
-
-
-    # pdf_file=os.path.join('data','dft','raw','Thomas_1927.pdf')
-    # pdf_file=os.path.join('data','dft','raw','1965-140 PR Kohn & Sham - Self-consistent equations including exchange & correlation effects.pdf')
-    # pdf_file=os.path.join('data','dft','raw','Thomas_1927.pdf')
-    # processor=PDFProcessor(
-    #                     output_dir=os.path.join('data','dft','interim'), 
-    #                     model='gpt-4o-mini',
-    #                     max_tokens=3000)
-    # processor.process(pdf_file, method='llm')
-
-    processor=PDFProcessor(
-                        output_dir=os.path.join('data','tiau','interim'), 
-                        model='gpt-4o-mini',
-                        max_tokens=3000)
-
-    pdf_files=glob(os.path.join('data','tiau','raw','*.pdf'))
-    for pdf_file in pdf_files:
-        print(pdf_file)
-        processor.process(pdf_file, method='llm')
-
-    
+        filename = filename.replace("%", "_").replace("(", "").replace(")", "").strip()
+        return filename
