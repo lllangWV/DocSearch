@@ -1,3 +1,4 @@
+import asyncio
 import io
 import json
 import os
@@ -108,46 +109,45 @@ class FormulaImage(BaseModel):
     summary: str
 
 
-def parse_image(
-    image_input: Union[Path, Image.Image],
-    prompt: str,
-    response_schema: BaseModel,
-    model: str = MODELS[0],
-):
-
-    print(f"Processing: {image_input}")
-
+# --- Helper for Image Preparation (No Duplication Here) ---
+def _prepare_image_data(image_input: Union[Path, Image.Image]) -> Tuple[bytes, str]:
+    """Prepares image bytes and mime type from Path or PIL Image."""
     if isinstance(image_input, Path):
-        # Handle file path input
         with open(image_input, "rb") as f:
             image_bytes = f.read()
-
-        file_ext = image_input.suffix
-        if file_ext == ".jpg":
+        file_ext = image_input.suffix.lower()
+        if file_ext == ".jpg" or file_ext == ".jpeg":
             mime_type = "image/jpeg"
         elif file_ext == ".png":
             mime_type = "image/png"
         else:
             raise ValueError(f"Unsupported file extension: {file_ext}")
-
     elif isinstance(image_input, Image.Image):
-        # Handle PIL Image input
-        import io
-
         buffer = io.BytesIO()
-        # Save as PNG to ensure consistent format
         image_input.save(buffer, format="PNG")
         image_bytes = buffer.getvalue()
         mime_type = "image/png"
-
     else:
         raise ValueError(
             f"Unsupported input type: {type(image_input)}. Expected Path or PIL Image."
         )
+    return image_bytes, mime_type
 
+
+# --- Core Synchronous API Call Logic (Single Source of Truth) ---
+def _make_api_call(
+    image_bytes: bytes,
+    mime_type: str,
+    prompt: str,
+    response_schema: BaseModel,
+    model: str,
+) -> Dict:
+    """Makes the synchronous API call to Google GenAI."""
+    print(f"Making API call (Model: {model})...")
+    # client = genai.GenerativeModel(model_name=model)  # Adjusted for current SDK
     client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
 
-    responses = client.models.generate_content(
+    response = client.models.generate_content(
         model=model,
         contents=[
             types.Part.from_bytes(
@@ -163,7 +163,63 @@ def parse_image(
         },
     )
 
-    return json.loads(responses.text)
+    # We need to make sure the response is JSON and load it.
+    # Gemini might return ```json ... ```, so we need to extract it.
+    try:
+        text_response = response.text
+        # Basic extraction if wrapped in markdown
+        if text_response.strip().startswith("```json"):
+            text_response = text_response.strip()[7:-3].strip()
+
+        parsed_json = json.loads(text_response)
+        # Optional: Validate with Pydantic
+        # validated_data = response_schema.model_validate(parsed_json)
+        # return validated_data.model_dump()
+        return parsed_json
+
+    except (json.JSONDecodeError, AttributeError, ValueError) as e:
+        print(f"Error parsing LLM response: {e}")
+        print(f"Raw response: {getattr(response, 'text', 'N/A')}")
+        # Return a default/error structure or re-raise
+        return {"error": str(e), "raw_text": getattr(response, "text", "N/A")}
+
+
+# --- Public Synchronous Function ---
+def parse_image(
+    image_input: Union[Path, Image.Image],
+    prompt: str,
+    response_schema: BaseModel,
+    model: str = MODELS[0],
+) -> Dict:
+    """Parses an image synchronously."""
+    print(f"Processing sync: {image_input}")
+    image_bytes, mime_type = _prepare_image_data(image_input)
+    return _make_api_call(image_bytes, mime_type, prompt, response_schema, model)
+
+
+# --- Public Asynchronous Function ---
+async def parse_image_async(
+    image_input: Union[Path, Image.Image],
+    prompt: str,
+    response_schema: BaseModel,
+    model: str = MODELS[0],
+) -> Dict:
+    """Parses an image asynchronously."""
+    print(f"Processing async: {image_input}")
+    image_bytes, mime_type = _prepare_image_data(image_input)
+
+    # Run the blocking API call in an executor
+    loop = asyncio.get_event_loop()
+    result = await loop.run_in_executor(
+        None,  # Use the default thread pool executor
+        _make_api_call,
+        image_bytes,
+        mime_type,
+        prompt,
+        response_schema,
+        model,
+    )
+    return result
 
 
 def find_nearest_caption(
@@ -626,6 +682,248 @@ class DocumentPageAnalyzer:
 
         return response_dict
 
+    async def parse_text_element_async(
+        self, element: Dict, model: str = MODELS[1]
+    ) -> PageImageText:
+        """
+        Async version of parse_text_element for concurrent processing.
+        """
+        response_dict = await parse_image_async(
+            element["image"],
+            model=model,
+            prompt=TEXT_EXTRACT_PROMPT,
+            response_schema=PageImageText,
+        )
+        return response_dict
+
+    async def parse_table_element_async(
+        self, element: Dict, model: str = MODELS[0]
+    ) -> TableImage:
+        """
+        Async version of parse_table_element for concurrent processing.
+        """
+        response_dict = await parse_image_async(
+            element["image"],
+            model=model,
+            prompt=TABLE_EXTRACT_PROMPT,
+            response_schema=TableImage,
+        )
+        return response_dict
+
+    async def parse_formula_element_async(
+        self, element: Dict, model: str = MODELS[0]
+    ) -> FormulaImage:
+        """
+        Async version of parse_formula_element for concurrent processing.
+        """
+        response_dict = await parse_image_async(
+            element["image"],
+            model=model,
+            prompt=FORMULA_EXTRACT_PROMPT,
+            response_schema=FormulaImage,
+        )
+        return response_dict
+
+    async def parse_figure_element_async(
+        self, element: Dict, model: str = MODELS[0]
+    ) -> FigureImage:
+        """
+        Async version of parse_figure_element for concurrent processing.
+        """
+        response_dict = await parse_image_async(
+            element["image"],
+            model=model,
+            prompt=FIGURE_EXTRACT_PROMPT,
+            response_schema=FigureImage,
+        )
+        return response_dict
+
+    async def parse_all_tables_async(
+        self, model: str = MODELS[0], max_concurrent: int = 5
+    ) -> None:
+        """
+        Parse all table elements asynchronously with concurrency control.
+
+        Args:
+            model: Model to use for table extraction
+            max_concurrent: Maximum number of concurrent API calls
+        """
+        table_elements = []
+        for class_name, class_elements in self.cropped_elements.items():
+            if class_name == "table":
+                table_elements.extend(class_elements)
+
+        if not table_elements:
+            print("No tables found to parse")
+            return
+
+        semaphore = asyncio.Semaphore(max_concurrent)
+
+        async def parse_single_table(table_element):
+            async with semaphore:
+                try:
+                    parsed_table_dict = await self.parse_table_element_async(
+                        table_element, model=model
+                    )
+                    for key, value in parsed_table_dict.items():
+                        table_element[key] = value
+                    print(f"✓ Parsed table {table_element['index']}")
+                except Exception as e:
+                    print(f"✗ Error parsing table {table_element['index']}: {e}")
+
+        # Create tasks for all tables
+        tasks = [parse_single_table(element) for element in table_elements]
+
+        # Execute all tasks concurrently
+        await asyncio.gather(*tasks)
+        print(f"Completed parsing {len(table_elements)} tables")
+
+    async def parse_all_figures_async(
+        self, model: str = MODELS[0], max_concurrent: int = 5
+    ) -> None:
+        """
+        Parse all figure elements asynchronously with concurrency control.
+
+        Args:
+            model: Model to use for figure extraction
+            max_concurrent: Maximum number of concurrent API calls
+        """
+        figure_elements = []
+        for class_name, class_elements in self.cropped_elements.items():
+            if class_name == "figure":
+                figure_elements.extend(class_elements)
+
+        if not figure_elements:
+            print("No figures found to parse")
+            return
+
+        semaphore = asyncio.Semaphore(max_concurrent)
+
+        async def parse_single_figure(figure_element):
+            async with semaphore:
+                try:
+                    parsed_figure_dict = await self.parse_figure_element_async(
+                        figure_element, model=model
+                    )
+                    for key, value in parsed_figure_dict.items():
+                        figure_element[key] = value
+                    print(f"✓ Parsed figure {figure_element['index']}")
+                except Exception as e:
+                    print(f"✗ Error parsing figure {figure_element['index']}: {e}")
+
+        # Create tasks for all figures
+        tasks = [parse_single_figure(element) for element in figure_elements]
+
+        # Execute all tasks concurrently
+        await asyncio.gather(*tasks)
+        print(f"Completed parsing {len(figure_elements)} figures")
+
+    async def parse_all_formulas_async(
+        self, model: str = MODELS[0], max_concurrent: int = 5
+    ) -> None:
+        """
+        Parse all formula elements asynchronously with concurrency control.
+
+        Args:
+            model: Model to use for formula extraction
+            max_concurrent: Maximum number of concurrent API calls
+        """
+        formula_elements = []
+        for class_name, class_elements in self.cropped_elements.items():
+            if class_name == "isolate_formula":
+                formula_elements.extend(class_elements)
+
+        if not formula_elements:
+            print("No formulas found to parse")
+            return
+
+        semaphore = asyncio.Semaphore(max_concurrent)
+
+        async def parse_single_formula(formula_element):
+            async with semaphore:
+                try:
+                    parsed_formula_dict = await self.parse_formula_element_async(
+                        formula_element, model=model
+                    )
+                    for key, value in parsed_formula_dict.items():
+                        formula_element[key] = value
+                    print(f"✓ Parsed formula {formula_element['index']}")
+                except Exception as e:
+                    print(f"✗ Error parsing formula {formula_element['index']}: {e}")
+
+        # Create tasks for all formulas
+        tasks = [parse_single_formula(element) for element in formula_elements]
+
+        # Execute all tasks concurrently
+        await asyncio.gather(*tasks)
+        print(f"Completed parsing {len(formula_elements)} formulas")
+
+    async def parse_all_text_async(
+        self, model: str = MODELS[1], max_concurrent: int = 5
+    ) -> None:
+        """
+        Parse all text elements asynchronously with concurrency control.
+
+        Args:
+            model: Model to use for text extraction
+            max_concurrent: Maximum number of concurrent API calls
+        """
+        text_elements = []
+        for class_name, class_elements in self.cropped_elements.items():
+            if class_name in ["plain-text", "title"]:
+                text_elements.extend(class_elements)
+
+        if not text_elements:
+            print("No text elements found to parse")
+            return
+
+        semaphore = asyncio.Semaphore(max_concurrent)
+
+        async def parse_single_text(text_element):
+            async with semaphore:
+                try:
+                    parsed_text_dict = await self.parse_text_element_async(
+                        text_element, model=model
+                    )
+                    for key, value in parsed_text_dict.items():
+                        text_element[key] = value
+                    print(f"✓ Parsed text {text_element['index']}")
+                except Exception as e:
+                    print(f"✗ Error parsing text {text_element['index']}: {e}")
+
+        # Create tasks for all text elements
+        tasks = [parse_single_text(element) for element in text_elements]
+
+        # Execute all tasks concurrently
+        await asyncio.gather(*tasks)
+        print(f"Completed parsing {len(text_elements)} text elements")
+
+    async def parse_all_elements_async(
+        self,
+        model: str = MODELS[1],
+        text_model: str = MODELS[1],
+        max_concurrent: int = 5,
+    ) -> None:
+        """
+        Parse all elements (tables, figures, formulas, text) asynchronously.
+
+        Args:
+            model: Model to use for tables, figures, and formulas
+            text_model: Model to use for text extraction
+            max_concurrent: Maximum number of concurrent API calls
+        """
+        print("Starting async parsing of all elements...")
+
+        # Parse all element types concurrently
+        await asyncio.gather(
+            self.parse_all_tables_async(model=model, max_concurrent=max_concurrent),
+            self.parse_all_figures_async(model=model, max_concurrent=max_concurrent),
+            self.parse_all_formulas_async(model=model, max_concurrent=max_concurrent),
+            self.parse_all_text_async(model=text_model, max_concurrent=max_concurrent),
+        )
+
+        print("✓ Completed async parsing of all elements")
+
     def save_elements(self, output_dir: Union[Path, str]) -> Dict[str, List[Path]]:
         """
         Save all cropped elements to disk in the same structure as extract_info.
@@ -733,81 +1031,118 @@ if __name__ == "__main__":
 
     page_filename = image_dir / "page_13.png"
 
-    # minutes_dir = data_dir / "minutes"
-    # interim_dir = minutes_dir / "interim"
-    # december_dir = interim_dir / "december-5-2013-emergency-meeting-minutes"
-
-    # minute_dir = interim_dir / "august-22-2023-bog-minutes-with-attachments"
-    # image_dir = minute_dir / "images"
-
-    # # Load model
+    # Load model
     model_weights = data_dir / "doclayout_yolo_docstructbench_imgsz1024.pt"
 
-    # # Process a single image
-    # page_filename = image_dir / "page_1.png"
-
-    # # page_filename = image_dir / "page_1.png"
-    # page_filename = image_dir / "page_26.png"
-
-    # # Example 1: Using the original extract_info function
-    # print("=== Extracting Figures and Tables (Original Function) ===")
-    # results = extract_info(
-    #     image_path=page_filename,
-    #     model=model,
-    #     output_dir=data_dir / "extracted-minutes",
-    #     confidence_threshold=0.2,
-    #     device="cpu",
-    # )
-
-    # Example 2: Using the new PageImage class
-    print("\n=== Using PageImage Class ===")
+    # Example 1: Using the new PageImage class (Synchronous)
+    print("=== Using DocumentPageAnalyzer Class (Synchronous) ===")
     page_image = DocumentPageAnalyzer(page_filename, model_weights=model_weights)
 
     # Extract elements and keep them in memory
     page_image.extract_elements(confidence_threshold=0.2, device="cpu")
+
+    # Synchronous parsing (original way)
+    print("\n--- Synchronous Parsing ---")
+    import time
+
+    start_time = time.time()
+
     page_image.parse_all_tables(model=MODELS[1])
     page_image.parse_all_text(model=MODELS[1])
     page_image.parse_all_formulas(model=MODELS[1])
     page_image.parse_all_figures(model=MODELS[1])
     page_image.parse_text(model=MODELS[1])
 
+    sync_time = time.time() - start_time
+    print(f"Synchronous parsing completed in {sync_time:.2f} seconds")
+
     # Access elements in memory
     figures = page_image.figures
     tables = page_image.tables
     formulas = page_image.formulas
 
-    print(figures)
-
-    print(f"Found {len(figures)} figures and {len(tables)} tables in memory")
+    print(
+        f"Found {len(figures)} figures, {len(tables)} tables, and {len(formulas)} formulas"
+    )
     print(f"Extraction summary: {page_image.extraction_summary}")
 
-    print("Saving elements to disk")
+    # Example 2: Using async parsing for better performance
+    print("\n=== Using DocumentPageAnalyzer Class (Asynchronous) ===")
+
+    # Create a new instance for async testing
+    page_image_async = DocumentPageAnalyzer(page_filename, model_weights=model_weights)
+    page_image_async.extract_elements(confidence_threshold=0.2, device="cpu")
+
+    async def async_parsing_example():
+        print("\n--- Asynchronous Parsing ---")
+        start_time = time.time()
+
+        # Parse all elements asynchronously with concurrency control
+        await page_image_async.parse_all_elements_async(
+            model=MODELS[1],
+            text_model=MODELS[1],
+            max_concurrent=3,  # Limit concurrent API calls
+        )
+
+        async_time = time.time() - start_time
+        print(f"Asynchronous parsing completed in {async_time:.2f} seconds")
+        print(f"Speed improvement: {sync_time/async_time:.2f}x faster")
+
+        return async_time
+
+    # Run the async example
+    async_time = asyncio.run(async_parsing_example())
+
+    # Example 3: Individual async parsing methods
+    # print("\n=== Individual Async Parsing Methods ===")
+
+    # page_image_individual = DocumentPageAnalyzer(
+    #     page_filename, model_weights=model_weights
+    # )
+    # page_image_individual.extract_elements(confidence_threshold=0.2, device="cpu")
+
+    # async def individual_async_example():
+    #     print("Parsing tables asynchronously...")
+    #     await page_image_individual.parse_all_tables_async(
+    #         model=MODELS[1], max_concurrent=2
+    #     )
+
+    #     print("Parsing figures asynchronously...")
+    #     await page_image_individual.parse_all_figures_async(
+    #         model=MODELS[1], max_concurrent=2
+    #     )
+
+    #     print("Individual async parsing completed")
+
+    # asyncio.run(individual_async_example())
+
+    print("\nSaving elements to disk")
     saved_results = page_image.save_elements(
         output_dir=data_dir / "extracted-minutes-class"
     )
     print(f"Saved elements to: {saved_results['output_directory']}")
 
+    # Save markdown files as before
     out_dir = saved_results["output_directory"]
     table_json = out_dir / "table" / "metadata.json"
     table_md = out_dir / "table" / "tables.md"
-    with open(table_json, "r") as f:
-        table_metadata = json.load(f)
-    with open(table_md, "w") as f:
-        for key, value in table_metadata.items():
-            f.write(f"{key}\n")
-            f.write(f"{value['md']}\n")
-            f.write("\n")
+
+    if table_json.exists():
+        with open(table_json, "r") as f:
+            table_metadata = json.load(f)
+        with open(table_md, "w") as f:
+            for key, value in table_metadata.items():
+                f.write(f"{key}\n")
+                f.write(f"{value['md']}\n")
+                f.write("\n")
 
     text_json = out_dir / "plain-text" / "metadata.json"
     text_md = out_dir / "plain-text" / "text.md"
-    with open(text_json, "r") as f:
-        text_metadata = json.load(f)
-    with open(text_md, "w") as f:
-        for key, value in text_metadata.items():
-            f.write(f"{key}\n")
-            f.write(f"{value['md']}\n")
-    # # Parse original image text and store in memory
-    # print("\n=== Parsing Original Image Text ===")
-    # original_text = page_image.parse_original_text()
-    # print(f"Original text parsed and stored in memory")
-    # print(f"Summary: {original_text['summary']}")
+
+    if text_json.exists():
+        with open(text_json, "r") as f:
+            text_metadata = json.load(f)
+        with open(text_md, "w") as f:
+            for key, value in text_metadata.items():
+                f.write(f"{key}\n")
+                f.write(f"{value['md']}\n")
