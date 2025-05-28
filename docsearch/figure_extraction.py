@@ -141,11 +141,21 @@ def _make_api_call(
     prompt: str,
     response_schema: BaseModel,
     model: str,
+    generate_config: Dict = None,
 ) -> Dict:
     """Makes the synchronous API call to Google GenAI."""
     print(f"Making API call (Model: {model})...")
     # client = genai.GenerativeModel(model_name=model)  # Adjusted for current SDK
     client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
+    generate_config = generate_config or {}
+
+    default_config = {
+        "response_mime_type": "application/json",
+        "response_schema": response_schema,
+        "temperature": 0.0,
+    }
+
+    default_config.update(generate_config)
 
     response = client.models.generate_content(
         model=model,
@@ -156,11 +166,7 @@ def _make_api_call(
             ),
             prompt,
         ],
-        config={
-            "system_instruction": "You are a helpful assistant that extracts text from images.",
-            "response_mime_type": "application/json",
-            "response_schema": response_schema,
-        },
+        config=default_config,
     )
 
     # We need to make sure the response is JSON and load it.
@@ -189,12 +195,16 @@ def parse_image(
     image_input: Union[Path, Image.Image],
     prompt: str,
     response_schema: BaseModel,
+    system_prompt: str = None,
     model: str = MODELS[0],
+    generate_config: Dict = None,
 ) -> Dict:
     """Parses an image synchronously."""
     print(f"Processing sync: {image_input}")
     image_bytes, mime_type = _prepare_image_data(image_input)
-    return _make_api_call(image_bytes, mime_type, prompt, response_schema, model)
+    return _make_api_call(
+        image_bytes, mime_type, prompt, response_schema, model, generate_config
+    )
 
 
 # --- Public Asynchronous Function ---
@@ -203,6 +213,7 @@ async def parse_image_async(
     prompt: str,
     response_schema: BaseModel,
     model: str = MODELS[0],
+    generate_config: Dict = None,
 ) -> Dict:
     """Parses an image asynchronously."""
     print(f"Processing async: {image_input}")
@@ -218,6 +229,7 @@ async def parse_image_async(
         prompt,
         response_schema,
         model,
+        generate_config,
     )
     return result
 
@@ -1067,31 +1079,31 @@ if __name__ == "__main__":
     print(f"Extraction summary: {page_image.extraction_summary}")
 
     # Example 2: Using async parsing for better performance
-    print("\n=== Using DocumentPageAnalyzer Class (Asynchronous) ===")
+    # print("\n=== Using DocumentPageAnalyzer Class (Asynchronous) ===")
 
-    # Create a new instance for async testing
-    page_image_async = DocumentPageAnalyzer(page_filename, model_weights=model_weights)
-    page_image_async.extract_elements(confidence_threshold=0.2, device="cpu")
+    # # Create a new instance for async testing
+    # page_image_async = DocumentPageAnalyzer(page_filename, model_weights=model_weights)
+    # page_image_async.extract_elements(confidence_threshold=0.2, device="cpu")
 
-    async def async_parsing_example():
-        print("\n--- Asynchronous Parsing ---")
-        start_time = time.time()
+    # async def async_parsing_example():
+    #     print("\n--- Asynchronous Parsing ---")
+    #     start_time = time.time()
 
-        # Parse all elements asynchronously with concurrency control
-        await page_image_async.parse_all_elements_async(
-            model=MODELS[1],
-            text_model=MODELS[1],
-            max_concurrent=3,  # Limit concurrent API calls
-        )
+    #     # Parse all elements asynchronously with concurrency control
+    #     await page_image_async.parse_all_elements_async(
+    #         model=MODELS[1],
+    #         text_model=MODELS[1],
+    #         max_concurrent=3,  # Limit concurrent API calls
+    #     )
 
-        async_time = time.time() - start_time
-        print(f"Asynchronous parsing completed in {async_time:.2f} seconds")
-        print(f"Speed improvement: {sync_time/async_time:.2f}x faster")
+    #     async_time = time.time() - start_time
+    #     print(f"Asynchronous parsing completed in {async_time:.2f} seconds")
+    #     print(f"Speed improvement: {sync_time/async_time:.2f}x faster")
 
-        return async_time
+    #     return async_time
 
-    # Run the async example
-    async_time = asyncio.run(async_parsing_example())
+    # # Run the async example
+    # async_time = asyncio.run(async_parsing_example())
 
     # Example 3: Individual async parsing methods
     # print("\n=== Individual Async Parsing Methods ===")
