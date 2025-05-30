@@ -300,6 +300,45 @@ class Page:
                 json.dump(self.to_dict(), f, indent=indent)
         return json.dumps(self.to_dict())
 
+    @classmethod
+    def _validate_image(cls, image):
+        if isinstance(image, str):
+            image = Path(image)
+
+        if isinstance(image, Path):
+            image = Image.open(image)
+        return image
+
+    @classmethod
+    async def parse(
+        cls,
+        extraction_results,
+        model=llm_processing.MODELS[2],
+        generate_config: Dict = None,
+    ):
+        tasks = []
+        for element_type, elements in extraction_results["elements"].items():
+            if element_type == "table":
+                class_type = Table
+            elif element_type == "formula":
+                class_type = Formula
+            elif element_type == "figure":
+                class_type = Figure
+            else:
+                continue
+            for element in elements:
+                tasks.append(
+                    class_type.from_image_async(
+                        element["image"],
+                        model=model,
+                        generate_config=generate_config,
+                        caption=element["caption"]["image"],
+                    )
+                )
+        results = await asyncio.gather(*tasks)
+
+        return results
+
     # Class methods remain the same
     @classmethod
     def from_image(
@@ -309,37 +348,8 @@ class Page:
         model=llm_processing.MODELS[2],
         generate_config: Dict = None,
     ):
-        if isinstance(image, str):
-            image = Path(image)
-
-        if isinstance(image, Path):
-            image = Image.open(image)
-
+        image = cls._validate_image(image)
         extraction_results = extract_image_elements(image, model_weights=model_weights)
-
-        async def parse_all_images():
-            tasks = []
-            for element_type, elements in extraction_results["elements"].items():
-                if element_type == "table":
-                    class_type = Table
-                elif element_type == "formula":
-                    class_type = Formula
-                elif element_type == "figure":
-                    class_type = Figure
-                else:
-                    continue
-                for element in elements:
-                    tasks.append(
-                        class_type.from_image_async(
-                            element["image"],
-                            model=model,
-                            generate_config=generate_config,
-                            caption=element["caption"]["image"],
-                        )
-                    )
-            results = await asyncio.gather(*tasks)
-
-            return results
 
         # Usually asyncio.run() is used to run an async function, but in a jupyter notbook this does not work.
         # So we need to run it in a separate thread so we can block before returning.
@@ -347,9 +357,21 @@ class Page:
             asyncio.get_running_loop()  # Triggers RuntimeError if no running event loop
             # Create a separate thread so we can block before returning
             with ThreadPoolExecutor(1) as pool:
-                results = pool.submit(lambda: asyncio.run(parse_all_images())).result()
+                results = pool.submit(
+                    lambda: asyncio.run(
+                        cls.parse(
+                            extraction_results,
+                            model=model,
+                            generate_config=generate_config,
+                        )
+                    )
+                ).result()
         except RuntimeError:
-            results = asyncio.run(parse_all_images())
+            results = asyncio.run(
+                cls.parse(
+                    extraction_results, model=model, generate_config=generate_config
+                )
+            )
 
         if not isinstance(results, list):
             results = [results]
@@ -365,10 +387,48 @@ class Page:
             elif isinstance(result, Formula):
                 formulas.append(result)
         return cls(
+            image=image,
             tables=tables,
             figures=figures,
             formulas=formulas,
+            annotated_image=extraction_results.get("annotated_image", None),
+            elements=extraction_results.get("elements", {}),
+        )
+
+    @classmethod
+    async def from_image_async(
+        cls,
+        image: Union[str, Path, Image.Image],
+        model_weights: Union[Path, str] = "doclayout_yolo_docstructbench_imgsz1024.pt",
+        model=llm_processing.MODELS[2],
+        generate_config: Dict = None,
+    ):
+        image = cls._validate_image(image)
+        extraction_results = extract_image_elements(image, model_weights=model_weights)
+
+        # Usually asyncio.run() is used to run an async function, but in a jupyter notbook this does not work.
+        # So we need to run it in a separate thread so we can block before returning.
+        results = await cls.parse(
+            extraction_results, model=model, generate_config=generate_config
+        )
+        if not isinstance(results, list):
+            results = [results]
+
+        tables = []
+        figures = []
+        formulas = []
+        for result in results:
+            if isinstance(result, Table):
+                tables.append(result)
+            elif isinstance(result, Figure):
+                figures.append(result)
+            elif isinstance(result, Formula):
+                formulas.append(result)
+        return cls(
             image=image,
+            tables=tables,
+            figures=figures,
+            formulas=formulas,
             annotated_image=extraction_results.get("annotated_image", None),
             elements=extraction_results.get("elements", {}),
         )
