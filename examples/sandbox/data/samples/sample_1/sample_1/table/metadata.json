@@ -1,1 +1,0 @@
-{"table_000": {"bbox": [489, 223, 2060, 584], "confidence": 0.9790166020393372, "class_name": "table", "type": "table", "index": 0, "name": "table_000", "md": null, "summary": null}, "table_001": {"bbox": [664, 722, 1884, 1259], "confidence": 0.9658927917480469, "class_name": "table", "type": "table", "index": 1, "name": "table_001", "md": null, "summary": null}}
