@@ -1,23 +1,14 @@
 import asyncio
 import json
-import os
-import re
 from concurrent.futures import ThreadPoolExecutor
-from io import StringIO
 from pathlib import Path
-from typing import Dict, List, Optional, Union
+from typing import Dict, List, Union
 
-import cv2
-import numpy as np
-import pandas as pd
-from doclayout_yolo import YOLOv10
-from huggingface_hub import hf_hub_download
 from PIL import Image
 
 from docsearch import llm_processing
 from docsearch.core.data import Figure, Formula, Table, Text, Title, Undefined
 from docsearch.core.page_layout import PageLayout
-from docsearch.utils.config import MODELS_DIR
 
 
 class Page:
