@@ -9,3 +9,4 @@ from docsearch.core.data import (
     Undefined,
 )
 from docsearch.core.page import Page
+from docsearch.core.page_layout import PageLayout
