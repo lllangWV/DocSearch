@@ -163,7 +163,7 @@ notebooks/data/
 __pycache__/
 my_tests/
 pymatgen/
-
+docsearch/models/
 
 poly_graphs_lib/cfg/mp_api.yml
 /CrabNet/

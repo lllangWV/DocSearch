@@ -1,5 +1,6 @@
 import asyncio
 import json
+import os
 import re
 from concurrent.futures import ThreadPoolExecutor
 from io import StringIO
@@ -10,10 +11,12 @@ import cv2
 import numpy as np
 import pandas as pd
 from doclayout_yolo import YOLOv10
+from huggingface_hub import hf_hub_download
 from PIL import Image
 
 from docsearch import llm_processing
 from docsearch.core.data import Figure, Formula, Table, Text, Title, Undefined
+from docsearch.utils.config import MODELS_DIR
 
 
 def find_nearest_caption(
@@ -77,6 +80,38 @@ def get_element_type(class_name: str) -> str:
         return "footnote"
 
 
+def get_doclayout_model(
+    model_weights: str = "doclayout_yolo_docstructbench_imgsz1024.pt",
+):
+
+    model_weights = Path(model_weights)
+    if model_weights.exists():
+        return model_weights
+
+    model_weights = MODELS_DIR / "doclayout_yolo_docstructbench_imgsz1024.pt"
+    model_name = model_weights.name
+    model_repo = "juliozhao/DocLayout-YOLO-DocStructBench"
+    if not os.path.exists(model_weights) or not os.listdir(
+        model_weights
+    ):  # Check if dir exists and is not empty
+        print(
+            f"Model not found locally. Downloading from Hugging Face Hub: {model_repo}"
+        )
+        try:
+            hf_hub_download(
+                repo_id=model_repo,
+                filename=model_name,
+                local_dir=MODELS_DIR,
+                local_dir_use_symlinks=False,
+            )
+            print("Model download complete.")
+        except Exception as e:
+            print(f"Failed to download model: {e}")
+            return model_weights
+
+    return model_weights  # Or the loaded model objects
+
+
 def extract_image_elements(
     image: Image.Image,
     model_weights: Union[Path, str] = "doclayout_yolo_docstructbench_imgsz1024.pt",
@@ -94,7 +129,7 @@ def extract_image_elements(
     """
 
     extraction_results = {}
-    model_weights = Path(model_weights)
+    model_weights = get_doclayout_model(model_weights)
     # Load original image
 
     model = YOLOv10(model_weights)
