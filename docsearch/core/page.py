@@ -13,7 +13,7 @@ from doclayout_yolo import YOLOv10
 from PIL import Image
 
 from docsearch import llm_processing
-from docsearch.core.data import Figure, Formula, Table
+from docsearch.core.data import Figure, Formula, Table, Text, Title, Undefined
 
 
 def find_nearest_caption(
@@ -111,7 +111,7 @@ def extract_image_elements(
     detection_results = det_res[0]
     boxes = detection_results.boxes
     names = detection_results.names
-    name_map = {i: name.replace(" ", "-") for i, name in names.items()}
+    name_map = {i: name for i, name in names.items()}
 
     if boxes is None or len(boxes) == 0:
         print("No detections found")
@@ -218,6 +218,9 @@ class Page:
         figures: List[Figure] = None,
         tables: List[Table] = None,
         formulas: List[Formula] = None,
+        text: List[Text] = None,
+        title: List[Title] = None,
+        undefined: List[Undefined] = None,
         annotated_image: Image.Image = None,
         elements: Dict[str, List[Dict]] = None,
     ):
@@ -225,6 +228,9 @@ class Page:
         self._figures = figures or []
         self._tables = tables or []
         self._formulas = formulas or []
+        self._text = text or []
+        self._title = title or []
+        self._undefined = undefined or []
         self._annotated_image = annotated_image
         self._elements = elements
 
@@ -263,6 +269,18 @@ class Page:
         return self._formulas
 
     @property
+    def title(self):
+        return self._title
+
+    @property
+    def text(self):
+        return self._text
+
+    @property
+    def undefined(self):
+        return self._undefined
+
+    @property
     def elements(self):
         return self._elements
 
@@ -270,17 +288,67 @@ class Page:
     def description(self):
         return self.__repr__()
 
-    def to_markdown(self, filepath: Union[str, Path] = None):
+    def full_save(self, out_dir: Union[str, Path]):
+        out_dir = Path(out_dir)
+        out_dir.mkdir(exist_ok=True)
+        self.to_json(out_dir / "page.json")
+        self.to_markdown(out_dir / "page.md")
+        self._image.save(out_dir / "page.png")
+        self._annotated_image.save(out_dir / "page_annotated.png")
+
+    def to_markdown(
+        self,
+        filepath: Union[str, Path] = None,
+        include_caption=False,
+        include_summary=False,
+        include_section_header=True,
+    ):
         tmp_str = ""
+        if include_section_header:
+            tmp_str += "# Page\n\n"
+
+        tmp_str += "## Text\n\n" if self._text else ""
+        for text in self._text:
+            tmp_str += text.to_markdown(
+                include_caption=include_caption, include_summary=include_summary
+            )
+            tmp_str += "\n\n"
+
+        tmp_str += "## Title\n\n" if self._title else ""
+        for title in self._title:
+            tmp_str += title.to_markdown(
+                include_caption=include_caption, include_summary=include_summary
+            )
+            tmp_str += "\n\n"
+
+        tmp_str += "## Figures\n\n" if self._figures else ""
         for fig in self._figures:
-            tmp_str += fig.to_markdown()
+            tmp_str += fig.to_markdown(
+                include_caption=include_caption, include_summary=include_summary
+            )
             tmp_str += "\n\n"
+
+        tmp_str += "## Tables\n\n" if self._tables else ""
         for table in self._tables:
-            tmp_str += table.to_markdown()
+            tmp_str += table.to_markdown(
+                include_caption=include_caption, include_summary=include_summary
+            )
             tmp_str += "\n\n"
+
+        tmp_str += "## Formulas\n\n" if self._formulas else ""
         for formula in self._formulas:
-            tmp_str += formula.to_markdown()
+            tmp_str += formula.to_markdown(
+                include_caption=include_caption, include_summary=include_summary
+            )
             tmp_str += "\n\n"
+
+        tmp_str += "## Undefined\n\n" if self._undefined else ""
+        for undefined in self._undefined:
+            tmp_str += undefined.to_markdown(
+                include_caption=include_caption, include_summary=include_summary
+            )
+            tmp_str += "\n\n"
+
         if filepath:
             with open(filepath, "w") as f:
                 f.write(tmp_str)
@@ -292,6 +360,9 @@ class Page:
             "figures": [fig.to_dict() for fig in self._figures],
             "tables": [table.to_dict() for table in self._tables],
             "formulas": [formula.to_dict() for formula in self._formulas],
+            "text": [text.to_dict() for text in self._text],
+            "title": [title.to_dict() for title in self._title],
+            "undefined": [undefined.to_dict() for undefined in self._undefined],
         }
 
     def to_json(self, filepath: Union[str, Path] = None, indent: int = 2):
@@ -320,10 +391,16 @@ class Page:
         for element_type, elements in extraction_results["elements"].items():
             if element_type == "table":
                 class_type = Table
-            elif element_type == "formula":
+            elif element_type == "isolate_formula":
                 class_type = Formula
             elif element_type == "figure":
                 class_type = Figure
+            elif element_type == "plain text":
+                class_type = Text
+            elif element_type == "title":
+                class_type = Title
+            elif element_type == "abandon":
+                class_type = Undefined
             else:
                 continue
             for element in elements:
@@ -338,6 +415,33 @@ class Page:
         results = await asyncio.gather(*tasks)
 
         return results
+
+    @staticmethod
+    def _gather_results(results):
+        gathered_results = {
+            "tables": [],
+            "figures": [],
+            "formulas": [],
+            "text": [],
+            "title": [],
+            "undefined": [],
+        }
+        for result in results:
+            if isinstance(result, Table):
+                gathered_results["tables"].append(result)
+            elif isinstance(result, Figure):
+                gathered_results["figures"].append(result)
+            elif isinstance(result, Formula):
+                gathered_results["formulas"].append(result)
+            elif isinstance(result, Text):
+                gathered_results["text"].append(result)
+            elif isinstance(result, Title):
+                gathered_results["title"].append(result)
+            elif isinstance(result, Undefined):
+                gathered_results["undefined"].append(result)
+            else:
+                raise ValueError(f"Unknown result type: {type(result)}\n {result}")
+        return gathered_results
 
     # Class methods remain the same
     @classmethod
@@ -376,21 +480,10 @@ class Page:
         if not isinstance(results, list):
             results = [results]
 
-        tables = []
-        figures = []
-        formulas = []
-        for result in results:
-            if isinstance(result, Table):
-                tables.append(result)
-            elif isinstance(result, Figure):
-                figures.append(result)
-            elif isinstance(result, Formula):
-                formulas.append(result)
+        gathered_results = Page._gather_results(results)
         return cls(
             image=image,
-            tables=tables,
-            figures=figures,
-            formulas=formulas,
+            **gathered_results,
             annotated_image=extraction_results.get("annotated_image", None),
             elements=extraction_results.get("elements", {}),
         )
@@ -414,21 +507,10 @@ class Page:
         if not isinstance(results, list):
             results = [results]
 
-        tables = []
-        figures = []
-        formulas = []
-        for result in results:
-            if isinstance(result, Table):
-                tables.append(result)
-            elif isinstance(result, Figure):
-                figures.append(result)
-            elif isinstance(result, Formula):
-                formulas.append(result)
+        gathered_results = Page._gather_results(results)
         return cls(
             image=image,
-            tables=tables,
-            figures=figures,
-            formulas=formulas,
+            **gathered_results,
             annotated_image=extraction_results.get("annotated_image", None),
             elements=extraction_results.get("elements", {}),
         )

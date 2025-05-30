@@ -417,3 +417,35 @@ class Text(ImageElementBase):
         )
 
         return result
+
+
+class Title(ImageElementBase):
+    def __init__(
+        self, image: Image.Image, md: str, summary: str = None, caption: Caption = None
+    ):
+        super().__init__(image, md, summary, caption)
+
+    @classmethod
+    async def parse(cls, image, caption, **kwargs):
+        model = kwargs.get("model", llm_processing.MODELS[2])
+        generate_config = kwargs.get("generate_config", None)
+        result = await llm_processing.parse_text(
+            image, model=model, generate_config=generate_config
+        )
+        return result
+
+
+class Undefined(ImageElementBase):
+    def __init__(
+        self, image: Image.Image, md: str, summary: str = None, caption: Caption = None
+    ):
+        super().__init__(image, md, summary, caption)
+
+    @classmethod
+    async def parse(cls, image, caption, **kwargs):
+        model = kwargs.get("model", llm_processing.MODELS[2])
+        generate_config = kwargs.get("generate_config", None)
+        result = await llm_processing.parse_text(
+            image, model=model, generate_config=generate_config
+        )
+        return result
