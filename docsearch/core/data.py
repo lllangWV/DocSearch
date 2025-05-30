@@ -45,11 +45,19 @@ def markdown_to_dataframe(markdown_table: str):
 
 class ImageElementBase(ABC):
 
-    def __init__(self, image: Image.Image, md: str, summary: str = None, caption=None):
+    def __init__(
+        self,
+        image: Image.Image,
+        md: str,
+        summary: str = None,
+        caption=None,
+        metadata: Dict = None,
+    ):
         self._image = image
         self._md = md
         self._summary = summary
         self._caption = caption
+        self._metadata = metadata
 
     @abstractmethod
     async def parse(cls, image, *args, caption=None, **kwargs):
@@ -77,6 +85,10 @@ class ImageElementBase(ABC):
     @property
     def description(self):
         return self.to_markdown(include_caption=True, include_summary=True)
+
+    @property
+    def metadata(self):
+        return self._metadata
 
     def to_markdown(
         self,
@@ -174,6 +186,7 @@ class ImageElementBase(ABC):
         model=llm_processing.MODELS[2],
         generate_config: Dict = None,
         caption: Union[str, Path, "Caption", Image.Image] = None,
+        metadata: Dict = None,
     ):
         image = cls._validate_image(image)
         caption = cls._validate_caption(caption)
@@ -204,6 +217,7 @@ class ImageElementBase(ABC):
             md=element_results["md"],
             summary=element_results["summary"],
             caption=caption,
+            metadata=metadata,
         )
 
     @classmethod
@@ -213,6 +227,7 @@ class ImageElementBase(ABC):
         model=llm_processing.MODELS[2],
         generate_config: Dict = None,
         caption: Union[str, Path, "Caption", Image.Image] = None,
+        metadata: Dict = None,
     ):
         image = cls._validate_image(image)
         caption = cls._validate_caption(caption)
@@ -226,6 +241,7 @@ class ImageElementBase(ABC):
             md=element_results["md"],
             summary=element_results["summary"],
             caption=caption,
+            metadata=metadata,
         )
 
 
@@ -245,17 +261,6 @@ class Caption(ImageElementBase):
 
 
 class Figure(ImageElementBase):
-    def __init__(
-        self,
-        image: Image.Image,
-        md: str,
-        summary: str,
-        caption: Caption = None,
-    ):
-        self._image = image
-        self._md = md
-        self._summary = summary
-        self._caption = caption
 
     @classmethod
     async def parse(cls, image, caption=None, **kwargs):
@@ -287,8 +292,9 @@ class Table(ImageElementBase):
         md: str,
         summary: str = None,
         caption: Caption = None,
+        metadata: Dict = None,
     ):
-        super().__init__(image, md, summary, caption)
+        super().__init__(image, md, summary, caption, metadata)
         self._df = markdown_to_dataframe(md)
 
     @classmethod
@@ -368,17 +374,6 @@ class Table(ImageElementBase):
 
 
 class Formula(ImageElementBase):
-    def __init__(
-        self,
-        image: Image.Image,
-        md: str,
-        summary: str,
-        caption: Caption = None,
-    ):
-        self._image = image
-        self._md = md
-        self._caption = caption
-        self._summary = summary
 
     @classmethod
     async def parse(cls, image, caption=None, **kwargs):
@@ -403,10 +398,6 @@ class Formula(ImageElementBase):
 
 
 class Text(ImageElementBase):
-    def __init__(
-        self, image: Image.Image, md: str, summary: str = None, caption: Caption = None
-    ):
-        super().__init__(image, md, summary, caption)
 
     @classmethod
     async def parse(cls, image, caption, **kwargs):
@@ -420,10 +411,6 @@ class Text(ImageElementBase):
 
 
 class Title(ImageElementBase):
-    def __init__(
-        self, image: Image.Image, md: str, summary: str = None, caption: Caption = None
-    ):
-        super().__init__(image, md, summary, caption)
 
     @classmethod
     async def parse(cls, image, caption, **kwargs):
@@ -436,10 +423,6 @@ class Title(ImageElementBase):
 
 
 class Undefined(ImageElementBase):
-    def __init__(
-        self, image: Image.Image, md: str, summary: str = None, caption: Caption = None
-    ):
-        super().__init__(image, md, summary, caption)
 
     @classmethod
     async def parse(cls, image, caption, **kwargs):

@@ -71,6 +71,17 @@ class Element:
     global_sort_index: Optional[int] = None
     type_sort_index: Optional[int] = None
 
+    def to_dict(self):
+        return {
+            "element_type": self.element_type,
+            "confidence": self.confidence,
+            "bbox": self.bbox,
+            "caption": self.caption.to_dict() if self.caption else None,
+            "footnote": self.footnote.to_dict() if self.footnote else None,
+            "global_sort_index": self.global_sort_index,
+            "type_sort_index": self.type_sort_index,
+        }
+
 
 class PageLayout:
     """Page layout analyzer using YOLO for element detection and extraction."""

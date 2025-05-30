@@ -22,9 +22,8 @@ class Page:
         text: List[Text] = None,
         title: List[Title] = None,
         undefined: List[Undefined] = None,
-        annotated_image: Image.Image = None,
-        elements: Dict[str, List[Dict]] = None,
         page_layout: PageLayout = None,
+        metadata: Dict = None,
     ):
         self._image = image
         self._figures = figures or []
@@ -33,9 +32,9 @@ class Page:
         self._text = text or []
         self._title = title or []
         self._undefined = undefined or []
-        self._annotated_image = annotated_image
-        self._elements = elements
         self._page_layout = page_layout
+        self._annotated_image = page_layout.annotated_image
+        self._metadata = metadata
 
     def __repr__(self):
         return f"Page(\nimage={self._image}, \nfigures={self._figures}, \ntables={self._tables}, \nformulas={self._formulas}, \nannotated_image={self._annotated_image}, \nelements={self._elements})"
@@ -84,10 +83,6 @@ class Page:
         return self._undefined
 
     @property
-    def elements(self):
-        return self._elements
-
-    @property
     def page_layout(self):
         return self._page_layout
 
@@ -102,6 +97,32 @@ class Page:
         self.to_markdown(out_dir / "page.md")
         self._image.save(out_dir / "page.png")
         self._annotated_image.save(out_dir / "page_annotated.png")
+
+    def to_sorted_markdown(
+        self,
+        filepath: Union[str, Path] = None,
+        include_caption=True,
+        include_summary=False,
+    ):
+        tmp_str = ""
+        element_list = []
+        sort_indices = []
+        for element_type in self._elements:
+            for element in self._elements[element_type]:
+                element_list.append(element)
+                sort_indices.append(element.global_sort_index)
+        sorted_element_list = [element_list[i] for i in sort_indices]
+
+        for element in sorted_element_list:
+            tmp_str += element.to_markdown(
+                include_caption=include_caption, include_summary=include_summary
+            )
+            tmp_str += "\n\n"
+
+        if filepath:
+            with open(filepath, "w") as f:
+                f.write(tmp_str)
+        return tmp_str
 
     def to_markdown(
         self,
@@ -190,12 +211,12 @@ class Page:
     @classmethod
     async def parse(
         cls,
-        page_layout_dict,
+        page_layout,
         model=llm_processing.MODELS[2],
         generate_config: Dict = None,
     ):
         tasks = []
-        for element_type, elements in page_layout_dict["elements"].items():
+        for element_type, elements in page_layout.elements.items():
             if element_type == "table":
                 class_type = Table
             elif element_type == "formula":
@@ -210,7 +231,9 @@ class Page:
                 class_type = Undefined
             else:
                 continue
+
             for element in elements:
+                metadata = element.to_dict()
                 caption = None
                 if element.caption:
                     caption = element.caption.image
@@ -222,6 +245,7 @@ class Page:
                         model=model,
                         generate_config=generate_config,
                         caption=caption,
+                        metadata=metadata,
                     )
                 )
         results = await asyncio.gather(*tasks)
@@ -280,7 +304,7 @@ class Page:
                 results = pool.submit(
                     lambda: asyncio.run(
                         cls.parse(
-                            page_layout_dict,
+                            page_layout,
                             model=model,
                             generate_config=generate_config,
                         )
@@ -288,9 +312,7 @@ class Page:
                 ).result()
         except RuntimeError:
             results = asyncio.run(
-                cls.parse(
-                    page_layout_dict, model=model, generate_config=generate_config
-                )
+                cls.parse(page_layout, model=model, generate_config=generate_config)
             )
 
         if not isinstance(results, list):
@@ -300,8 +322,6 @@ class Page:
         return cls(
             image=image,
             **gathered_results,
-            annotated_image=page_layout_dict.get("annotated_image", None),
-            elements=page_layout_dict.get("elements", {}),
             page_layout=page_layout,
         )
 
@@ -318,12 +338,11 @@ class Page:
         # Use DocLayout class instead of extract_image_elements function
         page_layout = PageLayout(model_weights=model_weights)
         page_layout.extract_elements(image)
-        page_layout_dict = page_layout.to_dict()
 
         # Usually asyncio.run() is used to run an async function, but in a jupyter notbook this does not work.
         # So we need to run it in a separate thread so we can block before returning.
         results = await cls.parse(
-            page_layout_dict, model=model, generate_config=generate_config
+            page_layout, model=model, generate_config=generate_config
         )
         if not isinstance(results, list):
             results = [results]
@@ -332,7 +351,5 @@ class Page:
         return cls(
             image=image,
             **gathered_results,
-            annotated_image=page_layout_dict.get("annotated_image", None),
-            elements=page_layout_dict.get("elements", {}),
             page_layout=page_layout,
         )
