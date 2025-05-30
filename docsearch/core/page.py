@@ -13,10 +13,7 @@ from doclayout_yolo import YOLOv10
 from PIL import Image
 
 from docsearch import llm_processing
-from docsearch.core.caption import Caption
-from docsearch.core.figure import Figure
-from docsearch.core.formula import Formula
-from docsearch.core.table import Table
+from docsearch.core.data import Figure, Formula, Table
 
 
 def find_nearest_caption(
