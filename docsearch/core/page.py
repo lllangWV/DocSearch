@@ -35,6 +35,7 @@ class Page:
         self._undefined = undefined or []
         self._annotated_image = annotated_image
         self._elements = elements
+        self._page_layout = page_layout
 
     def __repr__(self):
         return f"Page(\nimage={self._image}, \nfigures={self._figures}, \ntables={self._tables}, \nformulas={self._formulas}, \nannotated_image={self._annotated_image}, \nelements={self._elements})"
@@ -87,6 +88,10 @@ class Page:
         return self._elements
 
     @property
+    def page_layout(self):
+        return self._page_layout
+
+    @property
     def description(self):
         return self.__repr__()
 
@@ -101,7 +106,7 @@ class Page:
     def to_markdown(
         self,
         filepath: Union[str, Path] = None,
-        include_caption=False,
+        include_caption=True,
         include_summary=False,
         include_section_header=True,
     ):
@@ -313,12 +318,12 @@ class Page:
         # Use DocLayout class instead of extract_image_elements function
         page_layout = PageLayout(model_weights=model_weights)
         page_layout.extract_elements(image)
-        extraction_results = page_layout.to_dict()
+        page_layout_dict = page_layout.to_dict()
 
         # Usually asyncio.run() is used to run an async function, but in a jupyter notbook this does not work.
         # So we need to run it in a separate thread so we can block before returning.
         results = await cls.parse(
-            extraction_results, model=model, generate_config=generate_config
+            page_layout_dict, model=model, generate_config=generate_config
         )
         if not isinstance(results, list):
             results = [results]
@@ -327,6 +332,7 @@ class Page:
         return cls(
             image=image,
             **gathered_results,
-            annotated_image=extraction_results.get("annotated_image", None),
-            elements=extraction_results.get("elements", {}),
+            annotated_image=page_layout_dict.get("annotated_image", None),
+            elements=page_layout_dict.get("elements", {}),
+            page_layout=page_layout,
         )

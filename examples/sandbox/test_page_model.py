@@ -33,3 +33,8 @@ from docsearch.core import Page
 page = Page.from_image(sample_filepaths[3])
 md = Markdown(page.md)
 console.print(md, crop=False)
+
+
+print(page.page_layout.element_list)
+
+page.to_markdown(filepath=SAMPLES_DIR / sample_filepaths[3].stem / "page.md")

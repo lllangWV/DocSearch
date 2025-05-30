@@ -68,6 +68,8 @@ class Element:
     image: Image.Image
     caption: Optional["Element"] = None
     footnote: Optional["Element"] = None
+    global_sort_index: Optional[int] = None
+    type_sort_index: Optional[int] = None
 
 
 class PageLayout:
@@ -121,6 +123,8 @@ class PageLayout:
         self._image = None
         self._annotated_image = None
         self._class_counts = {}
+        self._sort_type_indices = {}
+        self._global_sort_indices = []
         self.results = None
 
     @property
@@ -137,6 +141,40 @@ class PageLayout:
     def elements(self) -> Dict[ElementType, List[Element]]:
         """Extracted elements organized by element type."""
         return self._elements
+
+    @property
+    def sorted_elements(self) -> Dict[ElementType, List[Element]]:
+        """Sort indices for elements by element type."""
+        return {
+            element_type: [
+                self.elements[element_type][i]
+                for i in self._sort_type_indices[element_type]
+            ]
+            for element_type in self.elements.keys()
+        }
+
+    @property
+    def element_list(self) -> List[Element]:
+        """Extracted elements organized by element type."""
+        element_list = []
+        for element_type in self.elements.keys():
+            element_list.extend(self.elements[element_type])
+        return element_list
+
+    @property
+    def sorted_element_list(self) -> List[Element]:
+        """Extracted elements organized by element type."""
+        return [self.element_list[i] for i in self._global_sort_indices]
+
+    @property
+    def global_sort_indices(self) -> List[int]:
+        """Global sort indices for elements."""
+        return self._global_sort_indices
+
+    @property
+    def sort_type_indices(self) -> Dict[ElementType, List[int]]:
+        """Sort type indices for elements."""
+        return self._sort_type_indices
 
     @property
     def figures(self) -> List[Dict]:
@@ -164,7 +202,7 @@ class PageLayout:
         return self._elements.get(ElementType.TITLE, [])
 
     @property
-    def abandoned(self) -> List[Dict]:
+    def unknown(self) -> List[Dict]:
         """Abandoned/undefined elements."""
         return self._elements.get(ElementType.UNKNOWN, [])
 
@@ -211,7 +249,11 @@ class PageLayout:
         elements = self._process_detections(boxes, element_name_map)
         elements = self._match_captions_and_footnotes(elements)
         self._elements = elements
+        self._sort_type_indices, self._global_sort_indices = (
+            self._get_element_sort_indices()
+        )
         # Create annotated image
+
         self._create_annotated_image(self.results)
 
         return self
@@ -291,6 +333,26 @@ class PageLayout:
 
         return elements
 
+    def _get_element_sort_indices(self):
+        """Sort elements by logical reading order."""
+        sort_type_indices = {}
+        for element_type in self._elements.keys():
+            sort_indices = find_element_logical_reading_order(
+                self._elements[element_type], self.image
+            )
+            for element, index in zip(self._elements[element_type], sort_indices):
+                element.type_sort_index = index
+            sort_type_indices[element_type] = sort_indices
+
+        elements = []
+        for element_type in self._elements.keys():
+            elements.extend(self._elements[element_type])
+        global_sort_indices = find_element_logical_reading_order(elements, self.image)
+        for element, index in zip(elements, global_sort_indices):
+            element.global_sort_index = index
+
+        return sort_type_indices, global_sort_indices
+
     def _create_annotated_image(self, detection_results):
         """Create annotated image with bounding boxes."""
         annotated_frame = detection_results.plot(pil=True, line_width=3, font_size=16)
@@ -306,7 +368,8 @@ class PageLayout:
         """Convert results to dictionary format (for backward compatibility)."""
         return {
             "annotated_image": self.annotated_image,
-            "elements": self.elements,
+            "elements": self.sorted_elements,
+            "elements_list": self.sorted_element_list,
         }
 
     def save(self, out_dir: Union[str, Path]):
@@ -388,3 +451,63 @@ def find_nearest_neighbor_element(
 
     neighbor_elements.pop(best_neighbor_element_index)
     return best_neighbor_element, neighbor_elements
+
+
+def find_element_logical_reading_order(
+    elements: List[Element], image: Image.Image
+) -> List[int]:
+    """Sort elements by logical reading order: multi-column elements by x then y,
+    with full-width elements inserted based on y-coordinate."""
+
+    if not elements:
+        return []
+
+    # Calculate center coordinates and width for each element
+    original_width, original_height = image.size
+
+    element_info = []
+    for i, element in enumerate(elements):
+        element_box = element.bbox
+        element_center_x = (element_box[0] + element_box[2]) / 2
+        element_center_y = (element_box[1] + element_box[3]) / 2
+        element_width = element_box[2] - element_box[0]
+        element_info.append((i, element_center_x, element_center_y, element_width))
+
+    # Separate elements into full-width and column elements
+    full_width_elements = []
+    column_elements = []
+
+    for i, center_x, center_y, width in element_info:
+        if width > original_width * 0.55:  # If element spans >55% of page width
+            full_width_elements.append((i, center_y))
+        else:
+            column_elements.append((i, center_x, center_y))
+
+    # Sort column elements by x coordinate first, then y coordinate
+    column_elements.sort(key=lambda x: (x[1], x[2]))  # Sort by x then y
+
+    # Sort full-width elements by y coordinate
+    full_width_elements.sort(key=lambda x: x[1])  # Sort by y
+
+    # Create the final sorted list by interleaving based on y-coordinates
+    result_indices = []
+    column_idx = 0
+    full_width_idx = 0
+
+    while column_idx < len(column_elements) or full_width_idx < len(
+        full_width_elements
+    ):
+        # Check if we should insert a full-width element
+        if full_width_idx < len(full_width_elements) and (
+            column_idx >= len(column_elements)
+            or full_width_elements[full_width_idx][1] <= column_elements[column_idx][2]
+        ):
+            # Insert full-width element
+            result_indices.append(full_width_elements[full_width_idx][0])
+            full_width_idx += 1
+        else:
+            # Insert column element
+            result_indices.append(column_elements[column_idx][0])
+            column_idx += 1
+
+    return result_indices
