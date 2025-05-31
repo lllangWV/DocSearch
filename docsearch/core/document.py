@@ -22,29 +22,43 @@ class Document:
     for processing PDF documents by extracting pages and analyzing content.
     """
 
-    def __init__(self, pages: List[Page]):
+    def __init__(self, pdf_path: Union[str, Path], pages: List[Page] = None, **kwargs):
         """
         Initialize Document with a list of Page objects.
 
         Args:
+            pdf_path: Path to the PDF file
             pages: List of Page objects
         """
-        self.pages = pages
+        self._pdf_path = pdf_path
+        self._pages = pages
+
+        if pages is None:
+            self._pages = Document._process_pages(
+                pdf_path,
+                dpi=kwargs.get("dpi", 300),
+                verbose=kwargs.get("verbose", True),
+                model_weights=kwargs.get(
+                    "model_weights", "doclayout_yolo_docstructbench_imgsz1024.pt"
+                ),
+                model=kwargs.get("model", None),
+                generate_config=kwargs.get("generate_config", None),
+            )
 
     def __len__(self):
         """Return the number of pages in the document."""
-        return len(self.pages)
+        return len(self._pages)
 
     def __getitem__(self, index):
         """Allow indexing into the pages list."""
-        return self.pages[index]
+        return self._pages[index]
 
     def __iter__(self):
         """Allow iteration over pages."""
-        return iter(self.pages)
+        return iter(self._pages)
 
     def __repr__(self):
-        return f"Document(pages={len(self.pages)})"
+        return f"Document(pages={len(self._pages)})"
 
     def __str__(self):
         return self.to_markdown()
@@ -54,37 +68,49 @@ class Document:
     def figures(self):
         """Get all figures from all pages."""
         all_figures = []
-        for page_num, page in enumerate(self.pages, 1):
-            for figure in page.figures:
-                # Add page number information
-                figure_dict = figure.to_dict()
-                figure_dict["page_number"] = page_num
-                all_figures.append(figure_dict)
+        for page_num, page in enumerate(self._pages, 1):
+            all_figures.extend(page.figures)
         return all_figures
 
     @property
     def tables(self):
         """Get all tables from all pages."""
         all_tables = []
-        for page_num, page in enumerate(self.pages, 1):
-            for table in page.tables:
-                # Add page number information
-                table_dict = table.to_dict()
-                table_dict["page_number"] = page_num
-                all_tables.append(table_dict)
+        for page_num, page in enumerate(self._pages, 1):
+            all_tables.extend(page.tables)
         return all_tables
 
     @property
     def formulas(self):
         """Get all formulas from all pages."""
         all_formulas = []
-        for page_num, page in enumerate(self.pages, 1):
-            for formula in page.formulas:
-                # Add page number information
-                formula_dict = formula.to_dict()
-                formula_dict["page_number"] = page_num
-                all_formulas.append(formula_dict)
+        for page_num, page in enumerate(self._pages, 1):
+            all_formulas.extend(page.formulas)
         return all_formulas
+
+    @property
+    def elements(self):
+        """Get all elements from all pages."""
+        all_elements = []
+        for page_num, page in enumerate(self._pages, 1):
+            all_elements.extend(page.elements)
+        return all_elements
+
+    @property
+    def text(self):
+        """Get all text from all pages."""
+        all_text = []
+        for page_num, page in enumerate(self._pages, 1):
+            all_text.extend(page.text)
+        return all_text
+
+    @property
+    def titles(self):
+        """Get all titles from all pages."""
+        all_titles = []
+        for page_num, page in enumerate(self._pages, 1):
+            all_titles.extend(page.titles)
+        return all_titles
 
     @property
     def markdown(self):
@@ -107,8 +133,8 @@ class Document:
         Returns:
             Page object or None if page doesn't exist
         """
-        if 1 <= page_number <= len(self.pages):
-            return self.pages[page_number - 1]
+        if 1 <= page_number <= len(self._pages):
+            return self._pages[page_number - 1]
         return None
 
     def get_figures_by_page(self, page_number: int) -> List:
@@ -127,7 +153,11 @@ class Document:
         return page.formulas if page else []
 
     # Output methods
-    def to_markdown(self, filepath: Union[str, Path] = None) -> str:
+    def to_markdown(
+        self,
+        filepath: Union[str, Path] = None,
+        page_kwargs: Dict = None,
+    ) -> str:
         """
         Convert all pages to markdown format.
 
@@ -138,10 +168,12 @@ class Document:
             Combined markdown string from all pages
         """
         markdown_content = []
+        if page_kwargs is None:
+            page_kwargs = {}
 
-        for page_num, page in enumerate(self.pages, 1):
+        for page_num, page in enumerate(self._pages, 1):
             markdown_content.append(f"# Page {page_num}\n")
-            page_md = page.to_markdown()
+            page_md = page.to_markdown(**page_kwargs)
             if page_md.strip():
                 markdown_content.append(page_md)
             markdown_content.append("\n")
@@ -149,6 +181,8 @@ class Document:
         combined_markdown = "\n".join(markdown_content)
 
         if filepath:
+            filepath = Path(filepath)
+            filepath.parent.mkdir(parents=True, exist_ok=True)
             with open(filepath, "w", encoding="utf-8") as f:
                 f.write(combined_markdown)
 
@@ -162,8 +196,8 @@ class Document:
             Dictionary containing all document data
         """
         return {
-            "total_pages": len(self.pages),
-            "pages": [page.to_dict() for page in self.pages],
+            "total_pages": len(self._pages),
+            "pages": [page.to_dict() for page in self._pages],
             "summary": {
                 "total_figures": len(self.figures),
                 "total_tables": len(self.tables),
@@ -189,6 +223,74 @@ class Document:
                 json.dump(data, f, indent=indent)
 
         return json.dumps(data, indent=indent)
+
+    @classmethod
+    def from_pdf(
+        cls,
+        pdf_path: Union[str, Path],
+        dpi: int = 300,
+        model_weights: Union[Path, str] = "doclayout_yolo_docstructbench_imgsz1024.pt",
+        model=None,
+        generate_config: Dict = None,
+        verbose: bool = True,
+    ):
+        """
+        Create a Document from a PDF file.
+
+        Args:
+            pdf_path: Path to the PDF file
+            dpi: Resolution for PDF to image conversion
+            model_weights: Path to YOLO model weights
+            model: LLM model for content parsing
+            generate_config: Configuration for content generation
+            verbose: Whether to print progress information
+
+        Returns:
+            Document object with all pages processed
+        """
+        pages = Document._process_pages(
+            pdf_path=pdf_path,
+            dpi=dpi,
+            model_weights=model_weights,
+            model=model,
+            generate_config=generate_config,
+            verbose=verbose,
+        )
+        return cls(pdf_path=pdf_path, pages=pages)
+
+    @classmethod
+    async def from_pdf_async(
+        cls,
+        pdf_path: Union[str, Path],
+        dpi: int = 300,
+        model_weights: Union[Path, str] = "doclayout_yolo_docstructbench_imgsz1024.pt",
+        model=None,
+        generate_config: Dict = None,
+        verbose: bool = True,
+    ):
+        """
+        Create a Document from a PDF file asynchronously.
+
+        Args:
+            pdf_path: Path to the PDF file
+            dpi: Resolution for PDF to image conversion
+            model_weights: Path to YOLO model weights
+            model: LLM model for content parsing
+            generate_config: Configuration for content generation
+            verbose: Whether to print progress information
+
+        Returns:
+            Document object with all pages processed
+        """
+        pages = await Document._process_pages_async(
+            pdf_path=pdf_path,
+            dpi=dpi,
+            model_weights=model_weights,
+            model=model,
+            generate_config=generate_config,
+            verbose=verbose,
+        )
+        return cls(pdf_path=pdf_path, pages=pages)
 
     # PDF extraction methods (adapted from DocProcessor)
     @staticmethod
@@ -223,75 +325,35 @@ class Document:
             logger.error(f"Error extracting pages from PDF: {e}")
             raise
 
-    @classmethod
-    def from_pdf(
-        cls,
-        pdf_path: Union[str, Path],
-        dpi: int = 300,
+    @staticmethod
+    async def _process_single_page(
+        page_image: Image.Image,
         model_weights: Union[Path, str] = "doclayout_yolo_docstructbench_imgsz1024.pt",
         model=None,
         generate_config: Dict = None,
-        verbose: bool = True,
     ):
-        """
-        Create a Document from a PDF file.
 
-        Args:
-            pdf_path: Path to the PDF file
-            dpi: Resolution for PDF to image conversion
-            model_weights: Path to YOLO model weights
-            model: LLM model for content parsing
-            generate_config: Configuration for content generation
-            verbose: Whether to print progress information
+        try:
+            page = await Page.from_image_async(
+                image=page_image,
+                model_weights=model_weights,
+                model=model,
+                generate_config=generate_config,
+            )
 
-        Returns:
-            Document object with all pages processed
-        """
-        if model is None:
-            model = llm_processing.MODELS[2]
+            return page
 
-        # Extract page images from PDF
-        page_images = cls._extract_pages_as_images(pdf_path, dpi=dpi, verbose=verbose)
+        except Exception as e:
+            logger.error(f"Error processing page: {e}")
+            return None
 
-        # Create Page objects for each image
-        pages = []
-        for i, page_image in enumerate(page_images, 1):
-            if verbose:
-                print(f"Processing page {i}/{len(page_images)}")
-
-            try:
-                page = Page.from_image(
-                    image=page_image,
-                    model_weights=model_weights,
-                    model=model,
-                    generate_config=generate_config,
-                )
-                pages.append(page)
-
-                if verbose:
-                    print(f"✓ Completed page {i}")
-
-            except Exception as e:
-                logger.error(f"Error processing page {i}: {e}")
-                if verbose:
-                    print(f"✗ Failed to process page {i}: {e}")
-                # Continue with other pages even if one fails
-                continue
-
-        if verbose:
-            print(f"✓ Document processing complete: {len(pages)} pages processed")
-
-        return cls(pages)
-
-    @classmethod
-    async def from_pdf_async(
-        cls,
+    @staticmethod
+    async def _process_pages_async(
         pdf_path: Union[str, Path],
         dpi: int = 300,
         model_weights: Union[Path, str] = "doclayout_yolo_docstructbench_imgsz1024.pt",
         model=None,
         generate_config: Dict = None,
-        max_concurrent: int = 5,
         verbose: bool = True,
     ):
         """
@@ -303,7 +365,6 @@ class Document:
             model_weights: Path to YOLO model weights
             model: LLM model for content parsing
             generate_config: Configuration for content generation
-            max_concurrent: Maximum number of concurrent page processing
             verbose: Whether to print progress information
 
         Returns:
@@ -313,44 +374,19 @@ class Document:
             model = llm_processing.MODELS[2]
 
         # Extract page images from PDF
-        page_images = cls._extract_pages_as_images(pdf_path, dpi=dpi, verbose=verbose)
-
-        if verbose:
-            print(
-                f"Processing {len(page_images)} pages asynchronously (max concurrent: {max_concurrent})..."
-            )
-
-        # Create semaphore to limit concurrent processing
-        semaphore = asyncio.Semaphore(max_concurrent)
-
-        async def process_single_page(page_num: int, page_image: Image.Image):
-            async with semaphore:
-                if verbose:
-                    print(f"Processing page {page_num}/{len(page_images)}")
-
-                try:
-                    page = await Page.from_image_async(
-                        image=page_image,
-                        model_weights=model_weights,
-                        model=model,
-                        generate_config=generate_config,
-                    )
-
-                    if verbose:
-                        print(f"✓ Completed page {page_num}")
-
-                    return page_num, page
-
-                except Exception as e:
-                    logger.error(f"Error processing page {page_num}: {e}")
-                    if verbose:
-                        print(f"✗ Failed to process page {page_num}: {e}")
-                    return page_num, None
+        page_images = Document._extract_pages_as_images(
+            pdf_path, dpi=dpi, verbose=verbose
+        )
 
         # Create tasks for all pages
         tasks = [
-            process_single_page(i, page_image)
-            for i, page_image in enumerate(page_images, 1)
+            Document._process_single_page(
+                page_image,
+                model_weights=model_weights,
+                model=model,
+                generate_config=generate_config,
+            )
+            for page_image in page_images
         ]
 
         # Execute all tasks concurrently
@@ -358,7 +394,7 @@ class Document:
 
         # Sort results by page number and filter out failed pages
         pages = []
-        for page_num, page in sorted(results):
+        for page in results:
             if page is not None:
                 pages.append(page)
 
@@ -367,24 +403,19 @@ class Document:
                 f"✓ Async document processing complete: {len(pages)}/{len(page_images)} pages processed successfully"
             )
 
-        return cls(pages)
+        return pages
 
-    @classmethod
-    def from_pdf_with_executor(
-        cls,
+    @staticmethod
+    def _process_pages(
         pdf_path: Union[str, Path],
         dpi: int = 300,
         model_weights: Union[Path, str] = "doclayout_yolo_docstructbench_imgsz1024.pt",
         model=None,
         generate_config: Dict = None,
-        max_concurrent: int = 5,
         verbose: bool = True,
     ):
         """
-        Create a Document from a PDF file using async processing in a sync context.
-
-        This method is useful when you want async performance but are calling
-        from a synchronous context (like Jupyter notebooks).
+        Create a Document from a PDF file asynchronously.
 
         Args:
             pdf_path: Path to the PDF file
@@ -392,41 +423,37 @@ class Document:
             model_weights: Path to YOLO model weights
             model: LLM model for content parsing
             generate_config: Configuration for content generation
-            max_concurrent: Maximum number of concurrent page processing
             verbose: Whether to print progress information
 
         Returns:
             Document object with all pages processed
         """
         try:
-            # Check if we're in an existing event loop
-            asyncio.get_running_loop()
-            # If we are, use ThreadPoolExecutor to run async code
-            with ThreadPoolExecutor(1) as executor:
-                future = executor.submit(
+            asyncio.get_running_loop()  # Triggers RuntimeError if no running event loop
+            # Create a separate thread so we can block before returning
+            with ThreadPoolExecutor(1) as pool:
+                pages = pool.submit(
                     lambda: asyncio.run(
-                        cls.from_pdf_async(
-                            pdf_path=pdf_path,
-                            dpi=dpi,
-                            model_weights=model_weights,
-                            model=model,
-                            generate_config=generate_config,
-                            max_concurrent=max_concurrent,
-                            verbose=verbose,
+                        Document._process_pages_async(
+                            pdf_path,
+                            dpi,
+                            model_weights,
+                            model,
+                            generate_config,
+                            verbose,
                         )
                     )
-                )
-                return future.result()
+                ).result()
         except RuntimeError:
-            # No existing event loop, we can use asyncio.run directly
-            return asyncio.run(
-                cls.from_pdf_async(
-                    pdf_path=pdf_path,
-                    dpi=dpi,
-                    model_weights=model_weights,
-                    model=model,
-                    generate_config=generate_config,
-                    max_concurrent=max_concurrent,
-                    verbose=verbose,
+            pages = asyncio.run(
+                Document._process_pages_async(
+                    pdf_path,
+                    dpi,
+                    model_weights,
+                    model,
+                    generate_config,
+                    verbose,
                 )
             )
+
+        return pages

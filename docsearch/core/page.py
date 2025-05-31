@@ -351,6 +351,11 @@ class Page:
             include_summary_by_type = {
                 element_type: True for element_type in element_types
             }
+            include_summary_by_type[ElementType.TITLE.value] = False
+            include_summary_by_type[ElementType.TEXT.value] = False
+            include_summary_by_type[ElementType.UNKNOWN.value] = False
+            include_summary_by_type[ElementType.FORMULA.value] = False
+            include_summary_by_type[ElementType.TABLE.value] = False
         if include_footnote_by_type is None:
             include_footnote_by_type = {
                 element_type: True for element_type in element_types
@@ -384,12 +389,8 @@ class Page:
     def to_dict(self):
 
         return {
-            "figures": [fig.to_dict() for fig in self._figures],
-            "tables": [table.to_dict() for table in self._tables],
-            "formulas": [formula.to_dict() for formula in self._formulas],
-            "text": [text.to_dict() for text in self._text],
-            "title": [title.to_dict() for title in self._title],
-            "undefined": [undefined.to_dict() for undefined in self._undefined],
+            "markdown": self.to_markdown(),
+            "elements": [element.to_dict() for element in self._elements],
         }
 
     def to_json(self, filepath: Union[str, Path] = None, indent: int = 2):
