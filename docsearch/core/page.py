@@ -47,12 +47,17 @@ class Element:
     markdown: str = None
     summary: str = None
 
-    def to_markdown(self, include_caption=True, include_summary=True):
+    def to_markdown(
+        self,
+        include_caption=True,
+        include_summary=True,
+        include_footnote=True,
+    ):
         tmp_str = ""
         tmp_str += self.markdown
         if include_caption and self.caption:
             tmp_str += f"\n\n{self.caption.markdown}"
-        if self.footnote:
+        if include_footnote and self.footnote:
             tmp_str += f"\n\n{self.footnote.markdown}"
         if include_summary and self.summary:
             tmp_str += f"\n\nSummary: {self.summary}"
@@ -262,48 +267,64 @@ class Page:
         self._image.save(out_dir / "page.png")
         self._annotated_image.save(out_dir / "page_annotated.png")
 
-    def get_markdown_by_type(self, include_caption=True, include_summary=False):
-
+    def get_markdown_by_type(
+        self,
+        include_caption_by_type: Dict[str, bool] = None,
+        include_summary_by_type: Dict[str, bool] = None,
+        include_footnote_by_type: Dict[str, bool] = None,
+    ):
         tmp_str = ""
         tmp_str += "## Text\n\n" if self.text else ""
         for text in self.text:
             tmp_str += text.to_markdown(
-                include_caption=include_caption, include_summary=include_summary
+                include_caption=include_caption_by_type[text.element_type],
+                include_summary=include_summary_by_type[text.element_type],
+                include_footnote=include_footnote_by_type[text.element_type],
             )
             tmp_str += "\n\n"
 
         tmp_str += "## Title\n\n" if self.titles else ""
         for title in self.titles:
             tmp_str += title.to_markdown(
-                include_caption=include_caption, include_summary=include_summary
+                include_caption=include_caption_by_type[title.element_type],
+                include_summary=include_summary_by_type[title.element_type],
+                include_footnote=include_footnote_by_type[title.element_type],
             )
             tmp_str += "\n\n"
 
         tmp_str += "## Figures\n\n" if self.figures else ""
         for fig in self.figures:
             tmp_str += fig.to_markdown(
-                include_caption=include_caption, include_summary=include_summary
+                include_caption=include_caption_by_type[fig.element_type],
+                include_summary=include_summary_by_type[fig.element_type],
+                include_footnote=include_footnote_by_type[fig.element_type],
             )
             tmp_str += "\n\n"
 
         tmp_str += "## Tables\n\n" if self.tables else ""
         for table in self.tables:
             tmp_str += table.to_markdown(
-                include_caption=include_caption, include_summary=include_summary
+                include_caption=include_caption_by_type[table.element_type],
+                include_summary=include_summary_by_type[table.element_type],
+                include_footnote=include_footnote_by_type[table.element_type],
             )
             tmp_str += "\n\n"
 
         tmp_str += "## Formulas\n\n" if self.formulas else ""
         for formula in self.formulas:
             tmp_str += formula.to_markdown(
-                include_caption=include_caption, include_summary=include_summary
+                include_caption=include_caption_by_type[formula.element_type],
+                include_summary=include_summary_by_type[formula.element_type],
+                include_footnote=include_footnote_by_type[formula.element_type],
             )
             tmp_str += "\n\n"
 
         tmp_str += "## Undefined\n\n" if self.unknown else ""
         for undefined in self.unknown:
             tmp_str += undefined.to_markdown(
-                include_caption=include_caption, include_summary=include_summary
+                include_caption=include_caption_by_type[undefined.element_type],
+                include_summary=include_summary_by_type[undefined.element_type],
+                include_footnote=include_footnote_by_type[undefined.element_type],
             )
             tmp_str += "\n\n"
 
@@ -313,20 +334,46 @@ class Page:
         self,
         filepath: Union[str, Path] = None,
         by_type: bool = False,
-        include_caption=True,
-        include_summary=True,
+        include_caption_by_type: Dict[str, bool] = None,
+        include_footnote_by_type: Dict[str, bool] = None,
+        include_summary_by_type: Dict[str, bool] = None,
         include_section_header=True,
     ):
+        element_types = []
+        for element in self.elements:
+            element_types.append(element.element_type)
+        element_types = set(element_types)
+        if include_caption_by_type is None:
+            include_caption_by_type = {
+                element_type: True for element_type in element_types
+            }
+        if include_summary_by_type is None:
+            include_summary_by_type = {
+                element_type: True for element_type in element_types
+            }
+        if include_footnote_by_type is None:
+            include_footnote_by_type = {
+                element_type: True for element_type in element_types
+            }
+
         if include_section_header:
             tmp_str = "# Page\n\n"
         else:
             tmp_str = ""
 
         if by_type:
-            tmp_str += self.get_markdown_by_type(include_caption, include_summary)
+            tmp_str += self.get_markdown_by_type(
+                include_caption_by_type=include_caption_by_type,
+                include_summary_by_type=include_summary_by_type,
+                include_footnote_by_type=include_footnote_by_type,
+            )
         else:
             for element in self.elements:
-                tmp_str += element.to_markdown(include_caption, include_summary)
+                tmp_str += element.to_markdown(
+                    include_caption=include_caption_by_type[element.element_type],
+                    include_summary=include_summary_by_type[element.element_type],
+                    include_footnote=include_footnote_by_type[element.element_type],
+                )
                 tmp_str += "\n\n"
 
         if filepath:
