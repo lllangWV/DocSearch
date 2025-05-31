@@ -45,8 +45,7 @@ TABLE_EXTRACT_PROMPT = """Extract the infromation from the image of the table in
 Follow these intructions:
 - MAKE SURE TO EXTRACT ALL THE INFORMATION FROM THE TABLE
 - Write the table in markdown format.
-- The number of columns and rows should match be as large as the largest number of columns or rows in the table.
-- Break merged cells into separate columns/rows
+- Make sure the number of columns for earch row is consistent so it can render in markdown.
 """
 
 

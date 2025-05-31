@@ -13,7 +13,6 @@ from huggingface_hub import hf_hub_download
 from PIL import Image
 
 from docsearch import llm_processing
-from docsearch.core import page_layout
 from docsearch.utils.config import MODELS_DIR
 
 
@@ -52,9 +51,9 @@ class Element:
         tmp_str = ""
         tmp_str += self.markdown
         if include_caption and self.caption:
-            tmp_str += f"\n{self.caption.markdown}"
+            tmp_str += f"\n\n{self.caption.markdown}"
         if self.footnote:
-            tmp_str += f"\n{self.footnote.markdown}"
+            tmp_str += f"\n\n{self.footnote.markdown}"
         if include_summary and self.summary:
             tmp_str += f"\n\nSummary: {self.summary}"
         return tmp_str
@@ -383,13 +382,23 @@ class Page:
         cls,
         image: Union[str, Path, Image.Image],
         model_weights: Union[Path, str] = "doclayout_yolo_docstructbench_imgsz1024.pt",
+        image_size=1024,
+        confidence_threshold=0.2,
+        device="cpu",
         model=llm_processing.MODELS[2],
         generate_config: Dict = None,
+        **kwargs,
     ):
         image = cls._validate_image(image)
 
         # Use DocLayout class instead of extract_image_elements function
-        elements, annotated_image = cls.extract_elements(image)
+        elements, annotated_image = Page.extract_elements(
+            image,
+            model_weights=model_weights,
+            image_size=image_size,
+            confidence_threshold=confidence_threshold,
+            device=device,
+        )
 
         # Usually asyncio.run() is used to run an async function, but in a jupyter notbook this does not work.
         # So we need to run it in a separate thread so we can block before returning.
@@ -423,13 +432,22 @@ class Page:
         cls,
         image: Union[str, Path, Image.Image],
         model_weights: Union[Path, str] = "doclayout_yolo_docstructbench_imgsz1024.pt",
+        image_size=1024,
+        confidence_threshold=0.2,
+        device="cpu",
         model=llm_processing.MODELS[2],
         generate_config: Dict = None,
     ):
         image = cls._validate_image(image)
 
         # Use DocLayout class instead of extract_image_elements function
-        elements, annotated_image = cls.extract_elements(image)
+        elements, annotated_image = cls.extract_elements(
+            image,
+            model_weights=model_weights,
+            image_size=image_size,
+            confidence_threshold=confidence_threshold,
+            device=device,
+        )
 
         # Usually asyncio.run() is used to run an async function, but in a jupyter notbook this does not work.
         # So we need to run it in a separate thread so we can block before returning.
