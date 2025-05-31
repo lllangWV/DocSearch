@@ -26,7 +26,8 @@ sample_filepaths = list(SAMPLES_DIR.glob("*.png"))
 #     print(f"sample_filepath: {filepath}")
 
 
-from docsearch.core import Page
+# from docsearch.core import Page
+from docsearch.core.element import Page
 
 # page = Page.from_image(sample_filepaths[5], model_weights=MODEL_WEIGHTS)
 
@@ -34,12 +35,12 @@ page = Page.from_image(sample_filepaths[3])
 md = Markdown(page.md)
 console.print(md, crop=False)
 
-print(page.tables[0].metadata)
-print(page.tables[1].metadata)
+# print(page.tables[0].metadata)
+# print(page.tables[1].metadata)
 
 # print(page.page_layout.element_list)
 
 # page.to_markdown(filepath=SAMPLES_DIR / sample_filepaths[3].stem / "page.md")
-page.to_sorted_markdown(
-    filepath=SAMPLES_DIR / sample_filepaths[3].stem / "page_sorted.md"
-)
+# page.to_sorted_markdown(
+#     filepath=SAMPLES_DIR / sample_filepaths[3].stem / "page_sorted.md"
+# )
