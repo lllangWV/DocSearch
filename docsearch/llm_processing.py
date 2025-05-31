@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
 
+from aiolimiter import AsyncLimiter
 from dotenv import load_dotenv
 from google import genai
 from google.genai import types
@@ -21,6 +22,21 @@ MODELS = [
     "gemini-2.0-flash",
     "gemini-2.0-flash-lite",
 ]
+
+
+LLM_API_RATE_LIMITS = {
+    "gemini-2.5-flash-preview-05-20": {"rpm": 1000, "rpd": 10000},
+    "gemini-2.5-flash-preview-04-17": {"rpm": 1000, "rpd": 10000},
+    "gemini-2.0-flash": {"rpm": 2000, "rpd": 20000},
+    "gemini-2.0-flash-lite": {"rpm": 4000, "rpd": 40000},
+}
+
+RATE_LIMITERS = {
+    "gemini-2.5-flash-preview-05-20": AsyncLimiter(1000),
+    "gemini-2.5-flash-preview-04-17": AsyncLimiter(1000),
+    "gemini-2.0-flash": AsyncLimiter(2000),
+    "gemini-2.0-flash-lite": AsyncLimiter(4000),
+}
 
 
 TEXT_EXTRACT_PROMPT = """Extarct the text from this image. 
@@ -200,18 +216,20 @@ async def parse_image(
     print(f"Processing async: {image_input}")
     image_bytes, mime_type = _prepare_image_data(image_input)
 
-    # Run the blocking API call in an executor
-    loop = asyncio.get_event_loop()
-    result = await loop.run_in_executor(
-        None,  # Use the default thread pool executor
-        _make_api_call,
-        image_bytes,
-        mime_type,
-        prompt,
-        response_schema,
-        model,
-        generate_config,
-    )
+    rate_limiter = RATE_LIMITERS[model]
+    async with rate_limiter:  # Acquire semaphore
+        # Run the blocking API call in an executor
+        loop = asyncio.get_event_loop()
+        result = await loop.run_in_executor(
+            None,  # Use the default thread pool executor
+            _make_api_call,
+            image_bytes,
+            mime_type,
+            prompt,
+            response_schema,
+            model,
+            generate_config,
+        )
     return result
 
 
