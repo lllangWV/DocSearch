@@ -1,8 +1,7 @@
 import json
 import logging
-import os
 import sys
-from glob import glob
+from pathlib import Path
 
 import nest_asyncio
 from dotenv import load_dotenv
@@ -37,14 +36,14 @@ class VectorStore:
         llm="gpt-4o-mini",
     ):
 
-        self.index_store_dir = index_store_dir
+        self.index_store_dir = Path(index_store_dir)
 
         self.index = None
         self.engine = None
         self.embed_model = embed_model
         self.llm = llm
 
-        self.output_dir = output_dir
+        self.output_dir = Path(output_dir) if output_dir else None
 
         self.metadata = {"embed_model": embed_model, "llm": llm}
         self.set_settings()
@@ -55,7 +54,7 @@ class VectorStore:
         self.load_llm(model=self.metadata["llm"])
 
     def exists(self):
-        return os.path.exists(self.index_store_dir)
+        return self.index_store_dir.exists()
 
     def set_settings(self):
         Settings.embed_model = OpenAIEmbedding(model=self.metadata["embed_model"])
@@ -63,14 +62,16 @@ class VectorStore:
         return None
 
     def save_metadata(self):
-        with open(os.path.join(self.index_store_dir, "metadata.json"), "w") as f:
+        metadata_file = self.index_store_dir / "metadata.json"
+        with open(metadata_file, "w") as f:
             json.dump(self.metadata, f)
 
     def load_metadata(self):
-        if not os.path.exists(os.path.join(self.index_store_dir, "metadata.json")):
+        metadata_file = self.index_store_dir / "metadata.json"
+        if not metadata_file.exists():
             return self.metadata
 
-        with open(os.path.join(self.index_store_dir, "metadata.json"), "r") as f:
+        with open(metadata_file, "r") as f:
             self.metadata = json.load(f)
 
         self.load_embed_model()
@@ -106,7 +107,7 @@ class VectorStore:
             show_progress=kwargs.get("show_progress", True),
             embed_model=embed_model,
         )
-        self.index.storage_context.persist(persist_dir=self.index_store_dir)
+        self.index.storage_context.persist(persist_dir=str(self.index_store_dir))
 
         self.save_metadata()
 
@@ -115,14 +116,16 @@ class VectorStore:
         # self.load_metadata()
         self.set_settings()
         self.index = load_index_from_storage(
-            StorageContext.from_defaults(persist_dir=self.index_store_dir)
+            StorageContext.from_defaults(persist_dir=str(self.index_store_dir))
         )
 
         if docs:
             print(f"Refreshing index {self.index_store_dir}")
             refreshed_docs = self.index.refresh(docs)
             if sum(refreshed_docs) != 0:
-                self.index.storage_context.persist(persist_dir=self.index_store_dir)
+                self.index.storage_context.persist(
+                    persist_dir=str(self.index_store_dir)
+                )
 
     def get_llama_debugger(self, debug=False):
         self.llama_debug = None
@@ -202,11 +205,12 @@ class VectorStore:
         if output_dir is None:
             output_dir = self.output_dir
 
-        dirs = os.listdir(output_dir)
+        output_path = Path(output_dir)
+        dirs = list(output_path.iterdir()) if output_path.exists() else []
         n_runs = len(dirs)
 
-        run_dir = os.path.join(output_dir, f"run_{n_runs}")
-        os.makedirs(run_dir, exist_ok=True)
+        run_dir = output_path / f"run_{n_runs}"
+        run_dir.mkdir(parents=True, exist_ok=True)
 
         # Seperating the response into context and response
         context = " ".join(
@@ -215,11 +219,11 @@ class VectorStore:
         source_nodes = [node.dict() for node in response.source_nodes]
 
         # Defining the file names
-        context_file = os.path.join(run_dir, "prompt.txt")
-        response_file = os.path.join(run_dir, "response.md")
-        source_file = os.path.join(run_dir, "source.json")
-        source_summary_file = os.path.join(run_dir, "source_summary.txt")
-        response_source_file = os.path.join(run_dir, "response_source.md")
+        context_file = run_dir / "prompt.txt"
+        response_file = run_dir / "response.md"
+        source_file = run_dir / "source.json"
+        source_summary_file = run_dir / "source_summary.txt"
+        response_source_file = run_dir / "response_source.md"
 
         with open(context_file, "w", encoding="utf-8") as f:
             f.write(context)
@@ -274,8 +278,9 @@ class VectorStore:
 # This should be moved to some class
 def create_document_from_pdf_directory(pdf_dir):
 
-    pdf_title = os.path.basename(pdf_dir)
-    json_file = os.path.join(pdf_dir, f"pdf_info.json")
+    pdf_dir_path = Path(pdf_dir)
+    pdf_title = pdf_dir_path.name
+    json_file = pdf_dir_path / "pdf_info.json"
 
     with open(json_file, "r") as f:
         data = json.load(f)
@@ -299,18 +304,18 @@ if __name__ == "__main__":
     ################################################################################################
     # Initialize the vector store
     store = VectorStore(
-        index_store_dir=os.path.join("data", "dft", "vector_stores", "dft"),
+        index_store_dir=Path("data") / "dft" / "vector_stores" / "dft",
         embed_model="text-embedding-3-small",
         llm="gpt-4o-mini",
     )
     ################################################################################################
     # Load singular document
-    # pdf_dir=os.path.join('data','dft','interim','Thomas_1927')
+    # pdf_dir = Path("data") / "dft" / "interim" / "Thomas_1927"
     # docs=create_document_from_pdf_directory(pdf_dir=pdf_dir)
     # index=store.load_docs(docs=docs)
 
     # Load multiple documents
-    # pdf_dirs=glob(os.path.join('data','dft','interim','*'))
+    # pdf_dirs = list((Path("data") / "dft" / "interim").glob("*"))
     # for pdf_dir in pdf_dirs:
     #     docs=create_document_from_pdf_directory(pdf_dir=pdf_dir)
     #     store.load_docs(docs=docs)
@@ -334,5 +339,5 @@ if __name__ == "__main__":
     # Using the query engine
     query = ()
     response = engine.query(query)
-    output_dir = os.path.join("data", "dft", "output")
+    output_dir = Path("data") / "dft" / "output"
     store.save_response(response, output_dir=output_dir)
