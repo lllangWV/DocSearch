@@ -1,10 +1,13 @@
 import asyncio
 import json
 import logging
+import shutil
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Dict, List, Optional, Union
 
+import pyarrow as pa
+import pyarrow.parquet as pq
 from pdf2image import convert_from_path
 from PIL import Image
 
@@ -22,7 +25,13 @@ class Document:
     for processing PDF documents by extracting pages and analyzing content.
     """
 
-    def __init__(self, pdf_path: Union[str, Path], pages: List[Page] = None, **kwargs):
+    def __init__(
+        self,
+        pdf_path: Union[str, Path],
+        pages: List[Page] = None,
+        pdf_id: str = 0,
+        **kwargs,
+    ):
         """
         Initialize Document with a list of Page objects.
 
@@ -32,6 +41,7 @@ class Document:
         """
         self._pdf_path = pdf_path
         self._pages = pages
+        self._pdf_id = pdf_id
 
         if pages is None:
             self._pages = Document._process_pages(
@@ -62,6 +72,9 @@ class Document:
 
     def __str__(self):
         return self.to_markdown()
+
+    def pages(self):
+        return self._pages
 
     # Properties for aggregated content
     @property
@@ -188,24 +201,122 @@ class Document:
 
         return combined_markdown
 
-    def to_dict(self) -> Dict:
+    @staticmethod
+    def pyarrow_struct():
+        return pa.struct(
+            [
+                pa.field("pages", pa.list_(Page.pyarrow_struct())),
+                pa.field("pdf_id", pa.str()),
+            ]
+        )
+
+    def to_dict(
+        self, include_images: bool = False, image_as_base64: bool = False, **kwargs
+    ) -> Dict:
         """
         Convert document to dictionary format.
 
         Returns:
             Dictionary containing all document data
         """
+        pages = []
+        for page in self._pages:
+            pages.append(
+                page.to_dict(
+                    include_images=include_images,
+                    image_as_base64=image_as_base64,
+                    **kwargs,
+                )
+            )
         return {
-            "total_pages": len(self._pages),
-            "pages": [page.to_dict() for page in self._pages],
-            "summary": {
-                "total_figures": len(self.figures),
-                "total_tables": len(self.tables),
-                "total_formulas": len(self.formulas),
-            },
+            "pdf_id": self._pdf_id,
+            "pdf_path": self._pdf_path,
+            "pages": pages,
         }
 
-    def to_json(self, filepath: Union[str, Path] = None, indent: int = 2) -> str:
+    def to_page_per_row(self):
+        pdf_dict = self.to_dict(include_images=True, image_as_base64=True)
+        pydict = {
+            "pdf_id": [],
+            "pdf_path": [],
+            "page_id": [],
+        }
+        for page_dict in pdf_dict["pages"]:
+            for key, value in page_dict.items():
+                if key not in pydict:
+                    pydict[key] = []
+                pydict[key].append(value)
+            pydict["pdf_id"].append(pdf_dict["pdf_id"])
+            pydict["pdf_path"].append(str(pdf_dict["pdf_path"]))
+
+        page_struct = Page.get_pyarrow_struct()
+        pdf_struct = {
+            "pdf_id": pa.int32(),
+            "pdf_path": pa.string(),
+        }
+        for field in page_struct:
+            pdf_struct[field.name] = field.type
+
+        schema = pa.schema(pdf_struct)
+        table = pa.Table.from_pydict(pydict, schema=schema)
+        return table
+
+    def to_pdf_per_row(self):
+        pdf_dict = self.to_dict(include_images=True, image_as_base64=True)
+        page_struct = Page.get_pyarrow_struct()
+
+        pdf_struct = {
+            "pdf_id": pa.int32(),
+            "pdf_path": pa.string(),
+            "pages": pa.list_(page_struct),
+        }
+        schema = pa.schema(pdf_struct)
+        table = pa.Table.from_pylist([pdf_dict], schema=schema)
+        return table
+
+    def to_pyarrow(self, filepath: Union[str, Path] = None, page_per_row: bool = True):
+        if page_per_row:
+            table = self.to_page_per_row()
+        else:
+            table = self.to_pdf_per_row()
+
+        if filepath:
+            pq.write_table(table, filepath)
+
+        return table
+
+    def save(
+        self,
+        dirpath: Union[str, Path],
+        save_pdf: bool = False,
+        save_json: bool = False,
+        **kwargs,
+    ):
+        """
+        Save document to a file.
+        """
+
+        if dirpath:
+            dirpath = Path(dirpath)
+            dirpath.mkdir(parents=True, exist_ok=True)
+
+        for page_num, page in enumerate(self._pages):
+            page.full_save(dirpath / f"page_{page_num}", **kwargs)
+
+        if save_pdf:
+            pdf_path = Path(self._pdf_path)
+            shutil.copy(pdf_path, dirpath / pdf_path.name)
+
+        if save_json:
+            self.to_json(dirpath / "document.json", **kwargs)
+
+    def to_json(
+        self,
+        filepath: Union[str, Path] = None,
+        indent: int = 2,
+        encoding: str = "utf-8",
+        **kwargs,
+    ) -> str:
         """
         Convert document to JSON format.
 
@@ -216,13 +327,47 @@ class Document:
         Returns:
             JSON string
         """
-        data = self.to_dict()
+        data = self.to_dict(include_images=kwargs.get("include_images", False))
 
         if filepath:
-            with open(filepath, "w", encoding="utf-8") as f:
+            with open(filepath, "w", encoding=encoding) as f:
                 json.dump(data, f, indent=indent)
 
         return json.dumps(data, indent=indent)
+
+    @classmethod
+    def from_dict(cls, data: Dict):
+        page_per_row = False
+        if "page_id" in data:
+            page_per_row = True
+
+        if page_per_row:
+            pages = []
+            page_ids = data["page_id"]
+            for page_id in page_ids:
+                page_dict = {}
+                for key, value in data.items():
+                    if key in ["pdf_id", "pdf_path"]:
+                        continue
+                    page_dict[key] = value[page_id]
+                pages.append(Page.from_dict(page_dict))
+            return cls(
+                pdf_path=data["pdf_path"][0],
+                pages=pages,
+                pdf_id=data["pdf_id"][0],
+            )
+        else:
+            pages = [Page.from_dict(page) for page in data["pages"][0]]
+            return cls(
+                pdf_path=data["pdf_path"][0],
+                pages=pages,
+                pdf_id=data["pdf_id"][0],
+            )
+
+    @classmethod
+    def from_pyarrow(cls, filepath: Union[str, Path]):
+        table = pq.read_table(filepath)
+        return cls.from_dict(table.to_pydict())
 
     @classmethod
     def from_pdf(
@@ -328,6 +473,7 @@ class Document:
     @staticmethod
     async def _process_single_page(
         page_image: Image.Image,
+        page_id: int = None,
         model_weights: Union[Path, str] = "doclayout_yolo_docstructbench_imgsz1024.pt",
         model=None,
         generate_config: Dict = None,
@@ -339,6 +485,7 @@ class Document:
                 model_weights=model_weights,
                 model=model,
                 generate_config=generate_config,
+                page_id=page_id,
             )
 
             return page
@@ -385,8 +532,9 @@ class Document:
                 model_weights=model_weights,
                 model=model,
                 generate_config=generate_config,
+                page_id=page_id,
             )
-            for page_image in page_images
+            for page_id, page_image in enumerate(page_images)
         ]
 
         # Execute all tasks concurrently

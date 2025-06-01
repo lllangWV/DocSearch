@@ -1,4 +1,5 @@
 import asyncio
+import io
 import json
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
@@ -8,12 +9,24 @@ from typing import Dict, List, Optional, Union
 
 import cv2
 import numpy as np
+import pyarrow as pa
+import pyarrow.parquet as pq
 from doclayout_yolo import YOLOv10
 from huggingface_hub import hf_hub_download
 from PIL import Image
 
 from docsearch import llm_processing
 from docsearch.utils.config import MODELS_DIR
+
+
+def pil_image_to_bytes(pil_image, format="PNG"):
+    """Converts a PIL Image to bytes in the specified format."""
+    if pil_image is None:
+        return None
+    img_byte_arr = io.BytesIO()
+    pil_image.save(img_byte_arr, format=format)
+    img_byte_arr = img_byte_arr.getvalue()
+    return img_byte_arr
 
 
 class ElementType(Enum):
@@ -41,9 +54,6 @@ class Element:
     image: Image.Image
     caption: Optional["Element"] = None
     footnote: Optional["Element"] = None
-    global_sort_index: Optional[int] = None
-    type_sort_index: Optional[int] = None
-
     markdown: str = None
     summary: str = None
 
@@ -63,16 +73,91 @@ class Element:
             tmp_str += f"\n\nSummary: {self.summary}"
         return tmp_str
 
-    def to_dict(self):
-        return {
+    def to_dict(self, include_image: bool = False, image_as_base64: bool = False):
+
+        data = {
             "element_type": self.element_type,
             "confidence": self.confidence,
             "bbox": self.bbox,
-            "caption": self.caption.to_dict() if self.caption else None,
-            "footnote": self.footnote.to_dict() if self.footnote else None,
-            "global_sort_index": self.global_sort_index,
-            "type_sort_index": self.type_sort_index,
+            "markdown": self.markdown,
+            "summary": self.summary,
+            "caption": (
+                self.caption.to_dict(include_image, image_as_base64)
+                if self.caption
+                else None
+            ),
+            "footnote": (
+                self.footnote.to_dict(include_image, image_as_base64)
+                if self.footnote
+                else None
+            ),
         }
+        if include_image:
+            if image_as_base64:
+                data["image"] = pil_image_to_bytes(self.image)
+            else:
+                data["image"] = self.image
+        return data
+
+    @classmethod
+    def from_dict(cls, data: Dict):
+        if not isinstance(data, dict):
+            raise ValueError("Data must be a dictionary")
+        if not "image" in data:
+            raise ValueError("Image not found in data")
+
+        if isinstance(data["image"], bytes):
+            data["image"] = Image.open(io.BytesIO(data["image"]))
+        if "caption" in data and data["caption"]:
+            data["caption"] = cls.from_dict(data["caption"])
+        if "footnote" in data and data["footnote"]:
+            data["footnote"] = cls.from_dict(data["footnote"])
+
+        return cls(**data)
+
+    @staticmethod
+    def get_pyarrow_struct(
+        include_captions: bool = True, include_footnotes: bool = True
+    ):
+        struct_dict = {
+            "element_type": pa.string(),
+            "confidence": pa.float32(),
+            "bbox": pa.list_(pa.int32()),
+            "image": pa.binary(),
+            "markdown": pa.string(),
+            "summary": pa.string(),
+        }
+        if include_captions:
+            struct_dict["caption"] = Element.get_pyarrow_struct(
+                include_captions=False, include_footnotes=False
+            )
+        if include_footnotes:
+            struct_dict["footnote"] = Element.get_pyarrow_struct(
+                include_captions=False, include_footnotes=False
+            )
+        return pa.struct(struct_dict)
+
+    @staticmethod
+    def get_pyarrow_empty_data(
+        include_captions: bool = True, include_footnotes: bool = True
+    ):
+        struct_dict = {
+            "element_type": None,
+            "confidence": None,
+            "bbox": None,
+            "image": None,
+            "markdown": None,
+            "summary": None,
+        }
+        if include_captions:
+            struct_dict["caption"] = Element.get_pyarrow_empty_data(
+                include_captions=False, include_footnotes=False
+            )
+        if include_footnotes:
+            struct_dict["footnote"] = Element.get_pyarrow_empty_data(
+                include_captions=False, include_footnotes=False
+            )
+        return struct_dict
 
     async def parse_content(self, model=None, generate_config=None):
         """Parse content based on element type."""
@@ -190,10 +275,12 @@ class Page:
         image: Image.Image,
         elements: List[Element],
         annotated_image: Image.Image = None,
+        page_id: int = 0,
     ):
         self._image = image
         self._elements = elements
         self._annotated_image = annotated_image
+        self._page_id = page_id
 
     def __repr__(self):
         return f"Page(\nimage={self._image}, \nelements={self._elements})"
@@ -211,11 +298,16 @@ class Page:
 
     @property
     def elements_by_type(self):
-        elements_by_type = {}
+        elements_by_type = {
+            ElementType.FIGURE.value: [],
+            ElementType.TABLE.value: [],
+            ElementType.FORMULA.value: [],
+            ElementType.TEXT.value: [],
+            ElementType.TITLE.value: [],
+            ElementType.UNKNOWN.value: [],
+        }
         for element in self._elements:
             element_type = element.element_type
-            if element_type not in elements_by_type:
-                elements_by_type[element_type] = []
             elements_by_type[element_type].append(element)
         return elements_by_type
 
@@ -259,11 +351,11 @@ class Page:
     def description(self):
         return self.__repr__()
 
-    def full_save(self, out_dir: Union[str, Path]):
+    def full_save(self, out_dir: Union[str, Path], **kwargs):
         out_dir = Path(out_dir)
         out_dir.mkdir(exist_ok=True)
-        self.to_json(out_dir / "page.json")
-        self.to_markdown(out_dir / "page.md")
+        self.to_json(out_dir / "page.json", **kwargs)
+        self.to_markdown(out_dir / "page.md", **kwargs)
         self._image.save(out_dir / "page.png")
         self._annotated_image.save(out_dir / "page_annotated.png")
 
@@ -338,6 +430,8 @@ class Page:
         include_footnote_by_type: Dict[str, bool] = None,
         include_summary_by_type: Dict[str, bool] = None,
         include_section_header=True,
+        encoding: str = "utf-8",
+        **kwargs,
     ):
         element_types = []
         for element in self.elements:
@@ -382,22 +476,98 @@ class Page:
                 tmp_str += "\n\n"
 
         if filepath:
-            with open(filepath, "w") as f:
+            with open(filepath, "w", encoding=encoding) as f:
                 f.write(tmp_str)
         return tmp_str
 
-    def to_dict(self):
+    @staticmethod
+    def get_pyarrow_struct():
+        element_struct = Element.get_pyarrow_struct()
 
-        return {
-            "markdown": self.to_markdown(),
-            "elements": [element.to_dict() for element in self._elements],
+        page_struct = {
+            "markdown": pa.string(),
+            "elements": pa.list_(element_struct),
+            "image": pa.binary(),
+            "annotated_image": pa.binary(),
+            "page_id": pa.int32(),
         }
 
-    def to_json(self, filepath: Union[str, Path] = None, indent: int = 2):
+        return pa.struct(page_struct)
+
+    def to_pyarrow(self, filepath: Union[str, Path] = None):
+        page_struct = Page.get_pyarrow_struct()
+        data = [self.to_dict(include_images=True, image_as_base64=True)]
+        page_schema = pa.schema(page_struct)
+        table = pa.Table.from_pylist(data, schema=page_schema)
+
         if filepath:
-            with open(filepath, "w") as f:
-                json.dump(self.to_dict(), f, indent=indent)
-        return json.dumps(self.to_dict())
+            pq.write_table(table, filepath)
+        return table
+
+    def to_dict(self, include_images: bool = False, image_as_base64: bool = False):
+        data = {
+            "markdown": self.to_markdown(),
+            "elements": [
+                element.to_dict(
+                    include_image=include_images, image_as_base64=image_as_base64
+                )
+                for element in self._elements
+            ],
+            "page_id": self._page_id,
+        }
+        if include_images:
+            if image_as_base64:
+                data["image"] = pil_image_to_bytes(self._image)
+                data["annotated_image"] = pil_image_to_bytes(self._annotated_image)
+            else:
+                data["image"] = self._image
+                data["annotated_image"] = self._annotated_image
+        return data
+
+    def to_json(
+        self,
+        filepath: Union[str, Path] = None,
+        indent: int = 2,
+        encoding: str = "utf-8",
+        **kwargs,
+    ):
+        if filepath:
+            with open(filepath, "w", encoding=encoding) as f:
+                json.dump(
+                    self.to_dict(
+                        include_images=kwargs.get("include_images", False),
+                        image_as_base64=kwargs.get("image_as_base64", False),
+                    ),
+                    f,
+                    indent=indent,
+                )
+        return json.dumps(
+            self.to_dict(
+                include_images=kwargs.get("include_images", False),
+                image_as_base64=kwargs.get("image_as_base64", False),
+            )
+        )
+
+    @classmethod
+    def from_dict(cls, data: Dict):
+        if not isinstance(data, dict):
+            raise ValueError("Data must be a dictionary")
+        if not "elements" in data:
+            raise ValueError("Elements not found in data")
+        elements = [Element.from_dict(element) for element in data["elements"]]
+        image = None
+        annotated_image = None
+        if "image" in data:
+            image = Image.open(io.BytesIO(data["image"]))
+        if "annotated_image" in data:
+            annotated_image = Image.open(io.BytesIO(data["annotated_image"]))
+        return cls(elements=elements, image=image, annotated_image=annotated_image)
+
+    @classmethod
+    def from_parquet(cls, filepath: Union[str, Path]):
+        table = pq.read_table(filepath)
+        data = table.to_pandas().to_dict(orient="records")
+        return cls.from_dict(data[0])
 
     @classmethod
     def _validate_image(cls, image):
@@ -466,9 +636,6 @@ class Page:
                 cls.parse(elements, model=model, generate_config=generate_config)
             )
 
-        # if not isinstance(results, list):
-        #     results = [results]
-
         return cls(
             image=image,
             elements=elements,
@@ -485,6 +652,7 @@ class Page:
         device="cpu",
         model=llm_processing.MODELS[2],
         generate_config: Dict = None,
+        page_id: int = None,
     ):
         image = cls._validate_image(image)
 
@@ -505,6 +673,7 @@ class Page:
             image=image,
             elements=elements,
             annotated_image=annotated_image,
+            page_id=page_id,
         )
 
     @staticmethod
