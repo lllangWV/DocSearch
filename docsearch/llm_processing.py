@@ -2,6 +2,7 @@ import asyncio
 import inspect
 import io
 import json
+import logging
 import os
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
@@ -12,6 +13,8 @@ from google import genai
 from google.genai import types
 from PIL import Image
 from pydantic import BaseModel
+
+logger = logging.getLogger(__name__)
 
 load_dotenv()
 
@@ -135,7 +138,7 @@ def _make_api_call(
     generate_config: Dict = None,
 ) -> Dict:
     """Makes the synchronous API call to Google GenAI."""
-    print(f"Making API call (Model: {model})...")
+    logger.debug(f"Making API call (Model: {model})...")
     # client = genai.GenerativeModel(model_name=model)  # Adjusted for current SDK
     client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
     generate_config = generate_config or {}
@@ -175,8 +178,8 @@ def _make_api_call(
         return parsed_json
 
     except (json.JSONDecodeError, AttributeError, ValueError) as e:
-        print(f"Error parsing LLM response: {e}")
-        print(f"Raw response: {getattr(response, 'text', 'N/A')}")
+        logger.error(f"Error parsing LLM response: {e}")
+        logger.error(f"Raw response: {getattr(response, 'text', 'N/A')}")
         # Return a default/error structure or re-raise
         return {"error": str(e), "raw_text": getattr(response, "text", "N/A")}
 
@@ -190,7 +193,7 @@ def parse_image_sync(
     generate_config: Dict = None,
 ) -> Dict:
     """Parses an image synchronously."""
-    print(f"Processing sync: {image_input}")
+    logger.debug(f"Processing sync: {image_input}")
     image_bytes, mime_type = _prepare_image_data(image_input)
     return _make_api_call(
         image_bytes, mime_type, prompt, response_schema, model, generate_config
@@ -213,7 +216,7 @@ async def parse_image(
     generate_config: Dict = None,
 ) -> Dict:
     """Parses an image asynchronously."""
-    print(f"Processing async: {image_input}")
+    logger.debug(f"Processing async: {image_input}")
     image_bytes, mime_type = _prepare_image_data(image_input)
 
     rate_limiter = RATE_LIMITERS[model]

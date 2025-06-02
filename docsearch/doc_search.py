@@ -4,6 +4,13 @@ from glob import glob
 from pathlib import Path
 from typing import List, Optional, Union
 
+import pyarrow as pa
+import pyarrow.compute as pc
+import pyarrow.dataset as ds
+import pyarrow.parquet as pq
+from llama_index import core as llama_core
+
+from docsearch.core import Document
 from docsearch.pdf_processing import PDFProcessor
 from docsearch.vector_store import VectorStore, create_document_from_pdf_directory
 
@@ -40,18 +47,13 @@ class DocSearch:
         self.max_tokens = max_tokens
 
         # Set up directory structure
-        self.raw_dir = self.base_path / "raw"
-        self.interim_dir = self.base_path / "interim"
         self.vector_store_dir = self.base_path / "vector_stores" / "default"
+        self.pages_path = self.base_path / "pages"
         self.output_dir = self.base_path / "output"
 
         # Create directories
-        self.raw_dir.mkdir(parents=True, exist_ok=True)
-        self.interim_dir.mkdir(parents=True, exist_ok=True)
         self.output_dir.mkdir(parents=True, exist_ok=True)
-
-        # Initialize PDF processor
-        self.pdf_processor = PDFProcessor(model=self.llm, max_tokens=self.max_tokens)
+        self.pages_path.mkdir(parents=True, exist_ok=True)
 
         # Initialize vector store
         self.vector_store = VectorStore(
@@ -61,6 +63,13 @@ class DocSearch:
         )
 
         self.engine = None
+
+    @property
+    def page_indices(self) -> List[int]:
+        """
+        Get all page indices from the document pages path.
+        """
+        return [int(p.stem.split("_")[-1]) for p in self.pages_path.glob("*.parquet")]
 
     def add_pdfs(
         self,
@@ -83,23 +92,32 @@ class DocSearch:
             pdf_paths = [Path(p) for p in pdf_paths]
 
         # Process each PDF
+        page_indices = self.page_indices.copy()
+
+        table_files = list(self.pages_path.glob("*.parquet"))
+        if len(table_files) > 0:
+            dataset = ds.dataset(self.pages_path, format="parquet")
+            pages_table = dataset.to_table(columns=["pdf_id"])
+            pdf_ids = pages_table["pdf_id"].to_pylist()
+        else:
+            pdf_ids = []
+
         for pdf_path in pdf_paths:
             if not pdf_path.exists():
                 logger.warning(f"Warning: PDF file not found: {pdf_path}")
                 continue
 
             logger.info(f"Processing PDF: {pdf_path}")
+            # Get the next available page index
+            next_page_index = max(page_indices) + 1 if page_indices else 0
+            next_pdf_index = max(pdf_ids) + 1 if pdf_ids else 0
+            page_indices.append(next_page_index)
+            pdf_ids.append(next_pdf_index)
 
-            # Create output directory for this PDF
-            pdf_output_dir = self.interim_dir / pdf_path.stem
-
+            out_filepath = self.pages_path / f"pages_{next_page_index}.parquet"
             # Use export_full to process and save both JSON and images
-            pdf_data, image_paths = self.pdf_processor.export_full(
-                pdf_path=pdf_path,
-                output_dir=pdf_output_dir,
-                method=extraction_method,
-                include_images=True,
-            )
+            document = Document.from_pdf(pdf_path, dpi=150, pdf_id=next_pdf_index)
+            document.to_pyarrow(filepath=out_filepath)
 
         # Auto-load processed PDFs if requested
         if auto_load:
@@ -111,19 +129,26 @@ class DocSearch:
         """
         logger.info("Loading processed PDFs into vector store")
 
-        # Get all directories in interim_dir
-        if self.interim_dir.exists():
-            pdf_dirs = [p for p in self.interim_dir.iterdir() if p.is_dir()]
-        else:
-            pdf_dirs = []
+        dataset = ds.dataset(self.pages_path, format="parquet")
+        table = dataset.to_table(columns=["pdf_id", "page_id", "markdown", "pdf_path"])
+        df = table.to_pandas()
 
-        for pdf_dir in pdf_dirs:
-            try:
-                docs = create_document_from_pdf_directory(pdf_dir=str(pdf_dir))
-                self.vector_store.load_docs(docs=docs)
-                logger.info(f"Loaded documents from: {pdf_dir.name}")
-            except Exception as e:
-                logger.error(f"Error loading documents from {pdf_dir}: {e}")
+        for index, row in df.iterrows():
+            pdf_path = Path(row["pdf_path"])
+            pdf_name = pdf_path.stem
+            metadata = {
+                "pdf_id": row["pdf_id"],
+                "page_id": row["page_id"],
+                "pdf_path": row["pdf_path"],
+                "pdf_name": pdf_name,
+            }
+
+            doc = llama_core.Document(
+                text=row["markdown"],
+                metadata=metadata,
+                id_=f"pdf_id-{row['pdf_id']}_page_id-{row['page_id']}",
+            )
+            self.vector_store.load_docs(docs=[doc])
 
     def query(
         self,
@@ -177,40 +202,6 @@ class DocSearch:
 
         return response
 
-    def add_pdfs_from_directory(
-        self,
-        directory_path: Union[str, Path],
-        pattern: str = "*.pdf",
-        extraction_method: str = "llm",
-        auto_load: bool = True,
-    ) -> None:
-        """
-        Add all PDFs from a directory.
-
-        Args:
-            directory_path: Directory containing PDF files
-            pattern: File pattern to match (default: "*.pdf")
-            extraction_method: Method to use for PDF processing
-            auto_load: Whether to automatically load processed PDFs into vector store
-        """
-        directory_path = Path(directory_path)
-
-        if not directory_path.exists():
-            logger.error(f"Directory not found: {directory_path}")
-            return
-
-        pdf_files = list(directory_path.glob(pattern))
-        if not pdf_files:
-            logger.error(
-                f"No PDF files found in {directory_path} matching pattern {pattern}"
-            )
-            return
-
-        logger.info(f"Found {len(pdf_files)} PDF files to process")
-        self.add_pdfs(
-            pdf_files, extraction_method=extraction_method, auto_load=auto_load
-        )
-
     def get_stats(self) -> dict:
         """
         Get statistics about the current DocSearch instance.
@@ -218,33 +209,26 @@ class DocSearch:
         Returns:
             Dictionary containing statistics
         """
-        # Count processed PDFs
-        if self.interim_dir.exists():
-            interim_dirs = [p for p in self.interim_dir.iterdir() if p.is_dir()]
-            processed_pdfs = len(interim_dirs)
-        else:
-            processed_pdfs = 0
-
+        document_ids = []
         # Count raw PDFs
-        if self.raw_dir.exists():
-            raw_pdfs = len(list(self.raw_dir.glob("*.pdf")))
+        if self.pages_path.exists():
+            document_ids = ds.dataset(self.pages_path, format="parquet").to_table(
+                columns=["pdf_id"]
+            )
+            total_pages = len(document_ids)
+            total_pdfs = len(pc.unique(document_ids["pdf_id"].combine_chunks()))
         else:
-            raw_pdfs = 0
-
-        # Count output runs
-        output_runs = 0
-        if self.output_dir.exists():
-            output_runs = len(list(self.output_dir.glob("run_*")))
+            total_pages = 0
+            total_pdfs = 0
 
         # Check if vector store exists
         vector_store_exists = self.vector_store.exists()
 
         return {
             "base_path": str(self.base_path),
-            "raw_pdfs": raw_pdfs,
-            "processed_pdfs": processed_pdfs,
+            "total_pages": total_pages,
+            "total_pdfs": total_pdfs,
             "vector_store_exists": vector_store_exists,
-            "output_runs": output_runs,
             "embed_model": self.embed_model,
             "llm": self.llm,
         }

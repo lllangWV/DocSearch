@@ -378,6 +378,7 @@ class Document:
         model=None,
         generate_config: Dict = None,
         verbose: bool = True,
+        pdf_id: int = 0,
     ):
         """
         Create a Document from a PDF file.
@@ -401,7 +402,7 @@ class Document:
             generate_config=generate_config,
             verbose=verbose,
         )
-        return cls(pdf_path=pdf_path, pages=pages)
+        return cls(pdf_path=pdf_path, pages=pages, pdf_id=pdf_id)
 
     @classmethod
     async def from_pdf_async(

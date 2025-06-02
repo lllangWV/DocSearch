@@ -75,7 +75,7 @@ logging_config = {
     },
     "loggers": {
         "docsearch": {
-            "level": "INFO",
+            "level": "ERROR",
             "handlers": ["console"],  # , "file"],
             "propagate": True,
         },

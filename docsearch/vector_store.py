@@ -243,11 +243,11 @@ class VectorStore:
                 text = node["node"]["text"]
 
                 id = node["node"]["id_"]
-                page_name = node["node"]["metadata"]["page_name"]
+                page_id = node["node"]["metadata"]["pdf_id"]
                 pdf_name = node["node"]["metadata"]["pdf_name"]
 
                 f.write(
-                    f"Source {i+1} | Score - {score} | pdf_name - {pdf_name} | page_name - {page_name}"
+                    f"Source {i+1} | Score - {score} | pdf_name - {pdf_name} | page_number - {page_id+1}"
                 )
                 f.write("\n")
 
@@ -267,11 +267,11 @@ class VectorStore:
                 text = node["node"]["text"]
 
                 id = node["node"]["id_"]
-                page_name = node["node"]["metadata"]["page_name"]
+                page_id = node["node"]["metadata"]["pdf_id"]
                 pdf_name = node["node"]["metadata"]["pdf_name"]
 
                 f.write(
-                    f"Source {i+1} | Score - {score:0.4f} | pdf_name - {pdf_name} | page_name - {page_name}\n"
+                    f"Source {i+1} | Score - {score:0.4f} | pdf_name - {pdf_name} | page_number - {page_id + 1}\n"
                 )
 
 

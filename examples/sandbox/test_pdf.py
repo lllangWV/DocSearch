@@ -26,13 +26,13 @@ PDF_PATH = (
     / "Fang et al. - 2022 - Molecular Contrastive Learning with Chemical Eleme.pdf"
 )
 
-PDF_PATH = ROOT_DIR.parent.parent / "data" / "test-dataset" / "phi-xps-2021-impact.pdf"
+# PDF_PATH = ROOT_DIR.parent.parent / "data" / "test-dataset" / "phi-xps-2021-impact.pdf"
 
-# doc = Document.from_pdf(PDF_PATH, dpi=150)
+doc = Document.from_pdf(PDF_PATH, dpi=200)
 # md = Markdown(doc.md)
 # console.print(md, crop=False)
 
-# doc.save(DATA_DIR / PDF_PATH.stem, save_pdf=True)
+doc.save(DATA_DIR / PDF_PATH.stem, save_pdf=True)
 
 
 # doc.to_pyarrow(filepath=DATA_DIR / PDF_PATH.stem / "pdf.parquet")
@@ -56,13 +56,13 @@ PDF_PATH = ROOT_DIR.parent.parent / "data" / "test-dataset" / "phi-xps-2021-impa
 
 # print(table.shape)
 
-doc = Document.from_pyarrow(DATA_DIR / PDF_PATH.stem / "pdf_per_row.parquet")
-table = doc.to_pyarrow(
-    filepath=DATA_DIR / PDF_PATH.stem / "pdf_per_row.parquet", page_per_row=True
-)
-table = doc.to_pyarrow(page_per_row=True)["markdown"].combine_chunks()[0]
-# print(table.schema)
-print(table)
+# doc = Document.from_pyarrow(DATA_DIR / PDF_PATH.stem / "pdf_per_row.parquet")
+# table = doc.to_pyarrow(
+#     filepath=DATA_DIR / PDF_PATH.stem / "pdf_per_row.parquet", page_per_row=True
+# )
+# table = doc.to_pyarrow(page_per_row=True)["markdown"].combine_chunks()[0]
+# # print(table.schema)
+# print(table)
 
 
 # print(page.tables[0].metadata)

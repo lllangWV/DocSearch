@@ -1,6 +1,7 @@
 import asyncio
 import io
 import json
+import logging
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from enum import Enum
@@ -17,6 +18,8 @@ from PIL import Image
 
 from docsearch import llm_processing
 from docsearch.utils.config import MODELS_DIR
+
+logger = logging.getLogger(__name__)
 
 
 def pil_image_to_bytes(pil_image, format="PNG"):
@@ -54,8 +57,8 @@ class Element:
     image: Image.Image
     caption: Optional["Element"] = None
     footnote: Optional["Element"] = None
-    markdown: str = None
-    summary: str = None
+    markdown: str = ""
+    summary: str = ""
 
     def to_markdown(
         self,
@@ -223,8 +226,8 @@ class Element:
             )
 
         # Set parsed content for this element
-        self.markdown = result.get("md", None)
-        self.summary = result.get("summary", None)
+        self.markdown = result.get("md", "")
+        self.summary = result.get("summary", "")
 
         return result
 
@@ -233,8 +236,8 @@ class Element:
         result = await llm_processing.parse_text(
             element.image, model=model, generate_config=generate_config
         )
-        element.markdown = result.get("md", None)
-        element.summary = result.get("summary", None)
+        element.markdown = result.get("md", "")
+        element.summary = result.get("summary", "")
 
 
 def get_doclayout_model(
@@ -250,7 +253,7 @@ def get_doclayout_model(
     if (
         not model_weights.exists() or not model_weights.is_file()
     ):  # Check if dir exists and is not empty
-        print(
+        logger.info(
             f"Model not found locally. Downloading from Hugging Face Hub: {model_repo}"
         )
         try:
@@ -260,9 +263,9 @@ def get_doclayout_model(
                 local_dir=MODELS_DIR,
                 local_dir_use_symlinks=False,
             )
-            print("Model download complete.")
+            logger.info("Model download complete.")
         except Exception as e:
-            print(f"Failed to download model: {e}")
+            logger.error(f"Failed to download model: {e}")
             return model_weights
 
     return model_weights
@@ -468,11 +471,13 @@ class Page:
             )
         else:
             for element in self.elements:
+
                 tmp_str += element.to_markdown(
                     include_caption=include_caption_by_type[element.element_type],
                     include_summary=include_summary_by_type[element.element_type],
                     include_footnote=include_footnote_by_type[element.element_type],
                 )
+
                 tmp_str += "\n\n"
 
         if filepath:
@@ -759,7 +764,7 @@ class Page:
         }
 
         if boxes is None or len(boxes) == 0:
-            print("No detections found")
+            logger.info("No detections found")
             elements = []
             annotated_image = image
             return elements, annotated_image
