@@ -11,8 +11,7 @@ import pyarrow.parquet as pq
 from llama_index import core as llama_core
 
 from docsearch.core import Document
-from docsearch.pdf_processing import PDFProcessor
-from docsearch.vector_store import VectorStore, create_document_from_pdf_directory
+from docsearch.core.vector_store import VectorStore, create_document_from_pdf_directory
 
 logger = logging.getLogger(__name__)
 
