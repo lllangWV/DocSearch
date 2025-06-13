@@ -10,7 +10,7 @@ from rich.console import Console
 from rich.markdown import Markdown
 
 from docsearch.core import Document
-from docsearch.doc_search import DocSearch
+from docsearch.core.doc_search import DocSearch
 
 console = Console()
 
