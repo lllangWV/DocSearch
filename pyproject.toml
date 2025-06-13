@@ -45,29 +45,31 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = [
-    "autopep8",
-    "jupyterlab",
-    "ipywidgets",
+
+tests = [
     "pytest",
-    "black",
-    "isort",
+    "pytest-cov",
+]
+
+docs= [
+    "ipython",
+    "imageio-ffmpeg",
     "sphinx",
+    "myst_parser",
     "sphinx_rtd_theme",
+    "sphinx-copybutton",
+    "nbsphinx",
+    "sphinx_design",
+    "sphinx-new-tab-link",
+    "sphinxcontrib-youtube",
+    "sphinxcontrib-video",
+    "pandoc",
+    "furo",
+    "numpydoc"
 ]
 
-web = [
-    "selenium",
-    "beautifulsoup4",
-]
-
-viz = [
-    "plotly",
-    "wordcloud",
-]
-
-all = [
-    "documentrag[dev,web,viz]",
+dev = [
+    "docsearch[dev,docs,tests]",
 ]
 
 [project.urls]
