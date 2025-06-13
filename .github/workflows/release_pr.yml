@@ -164,19 +164,13 @@ jobs:
 
       - name: Determine last release tag
         run: |
-          PREV_TAG=$(gh release list --limit 1 --json tagName --jq '.[0].tagName // ""')
+          PREV_TAG=$(gh release list --limit 1 --json tagName --jq '.[0].tagName')
           echo "PREV_TAG=$PREV_TAG" >> $GITHUB_ENV
 
       - name: Create new release branch from last tag
         run: |
           git fetch --tags origin
-          if [ -z "$PREV_TAG" ]; then
-            echo "No previous releases found. Creating release branch from main branch."
-            git checkout -b ${{ env.RELEASE_BRANCH_NAME }} main
-          else
-            echo "Creating release branch from previous tag: $PREV_TAG"
-            git checkout -b ${{ env.RELEASE_BRANCH_NAME }} "$PREV_TAG"
-          fi
+          git checkout -b ${{ env.RELEASE_BRANCH_NAME }} "$PREV_TAG"
 
       - name: Merge in the just-closed PR
         run: |
