@@ -11,8 +11,8 @@ import pyarrow.parquet as pq
 from pdf2image import convert_from_path
 from PIL import Image
 
-from docsearch.core import llm_processing
-from docsearch.core.page import Page
+from docrag.core import llm_processing
+from docrag.core.page import Page
 
 logger = logging.getLogger(__name__)
 

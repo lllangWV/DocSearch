@@ -16,7 +16,7 @@ import sys
 from distutils.sysconfig import get_python_lib
 from pathlib import Path
 
-from docsearch._version import version
+from docrag._version import version
 
 # ---------------
 project = "DocSearch"

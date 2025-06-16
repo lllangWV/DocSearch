@@ -9,8 +9,8 @@ from IPython.display import display
 from rich.console import Console
 from rich.markdown import Markdown
 
-from docsearch.core import Document
-from docsearch.figure_extraction import DocumentPageAnalyzer
+from docrag.core import Document
+from docrag.figure_extraction import DocumentPageAnalyzer
 
 console = Console()
 
