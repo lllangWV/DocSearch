@@ -1,11 +1,11 @@
-# DocSearch
+# DocRag
 
-DocSearch is an advanced document search and retrieval system that leverages Retrieval-Augmented Generation (RAG) to provide intelligent natural language search capabilities across PDF document collections. This system combines sophisticated PDF processing, vector embeddings, and large language models to enable semantic understanding of document content and context-aware responses to complex queries.
+DocRag is an advanced document search and retrieval system that leverages Retrieval-Augmented Generation (RAG) to provide intelligent natural language search capabilities across PDF document collections. This system combines sophisticated PDF processing, vector embeddings, and large language models to enable semantic understanding of document content and context-aware responses to complex queries.
 
 ## Installation
 
 ```bash
-pip install docsearch
+pip install docrag
 ```
 
 ## Getting Started
@@ -24,7 +24,7 @@ The notebook provides step-by-step examples and explanations to help you get up 
 
 ```python
 import os
-from docsearch import Document
+from docrag import Document
 
 # Set your Google Gemini API key
 os.environ['GEMINI_API_KEY'] = 'your-api-key-here'

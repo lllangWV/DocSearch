@@ -16,8 +16,8 @@ from doclayout_yolo import YOLOv10
 from huggingface_hub import hf_hub_download
 from PIL import Image
 
-from docsearch import llm_processing
-from docsearch.utils.config import MODELS_DIR
+from docrag.core import llm_processing
+from docrag.utils.config import MODELS_DIR
 
 logger = logging.getLogger(__name__)
 

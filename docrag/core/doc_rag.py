@@ -10,15 +10,15 @@ import pyarrow.dataset as ds
 import pyarrow.parquet as pq
 from llama_index import core as llama_core
 
-from docsearch.core import Document
-from docsearch.core.vector_store import VectorStore, create_document_from_pdf_directory
+from docrag.core import Document
+from docrag.core.vector_store import VectorStore, create_document_from_pdf_directory
 
 logger = logging.getLogger(__name__)
 
 
-class DocSearch:
+class DocRag:
     """
-    Main interface for the DocSearch package.
+    Main interface for the DocRag package.
 
     This class provides a simple interface to add PDFs, process them,
     and query the resulting vector database.
@@ -32,7 +32,7 @@ class DocSearch:
         max_tokens: int = 3000,
     ):
         """
-        Initialize DocSearch with the specified base directory.
+        Initialize DocRag with the specified base directory.
 
         Args:
             base_path: Path to the main directory for storing data

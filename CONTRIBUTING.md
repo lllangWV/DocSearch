@@ -1,6 +1,6 @@
 # Contributing
 
-Thank you for your interest in improving **DocSearch**! The project is maintained by volunteers and thrives on an inclusive and supportive community. This guide explains how to set up a development environment, run the automated checks, and submit your changes.
+Thank you for your interest in improving **DocRag**! The project is maintained by volunteers and thrives on an inclusive and supportive community. This guide explains how to set up a development environment, run the automated checks, and submit your changes.
 
 ## Table of Contents
 - [Being Respectful](#being-respectful)
@@ -18,18 +18,18 @@ Please demonstrate empathy and kindness toward other people, other software, and
 
 ## Getting the Code
 
-1. **Fork** <https://github.com/lllangWV/DocSearch> to your own GitHub account and then **clone** your fork:
+1. **Fork** <https://github.com/lllangWV/DocRag> to your own GitHub account and then **clone** your fork:
 
    ```bash
-   git clone https://github.com/<your-username>/DocSearch.git
-   cd DocSearch
+   git clone https://github.com/<your-username>/DocRag.git
+   cd DocRag
    ```
 
 2. **Create a virtual environment** and install the development dependencies:
 
    ```bash
-   conda create -n docsearch python=3.10
-   conda activate docsearch
+   conda create -n docrag python=3.10
+   conda activate docrag
    pip install -e .[dev]
    ```
 
@@ -64,7 +64,7 @@ These checks are triggered automatically when you open a pull request against th
 
 The documentation is hosted on **Read the Docs** and built automatically—there is no need to commit generated HTML. If you modify or add documentation, include the source files only (`docs/*.rst`, `docs/examples/*.ipynb` …).
 
-DocSearch's docs are generated with **Sphinx** and **sphinx‑gallery**. If you add code to the package, make sure to add the proper docstrings so the API reference is generated automatically.
+DocRag's docs are generated with **Sphinx** and **sphinx‑gallery**. If you add code to the package, make sure to add the proper docstrings so the API reference is generated automatically.
 
 To build the docs locally from the project root:
 
@@ -99,5 +99,5 @@ On documentation builds, the example directory is copied to `docs/source/example
 
 ## Need Help?
 
-If you get stuck, feel free to open a **GitHub Discussion** or start a **draft PR** early so we can guide you. Thank you for helping to make DocSearch better!
+If you get stuck, feel free to open a **GitHub Discussion** or start a **draft PR** early so we can guide you. Thank you for helping to make DocRag better!
 

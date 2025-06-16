@@ -9,8 +9,8 @@ from IPython.display import display
 from rich.console import Console
 from rich.markdown import Markdown
 
-from docsearch.core import Document
-from docsearch.core.doc_search import DocSearch
+from docrag.core import Document
+from docrag.core.doc_search import DocSearch
 
 console = Console()
 
