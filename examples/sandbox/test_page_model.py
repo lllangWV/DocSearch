@@ -13,7 +13,7 @@ from PIL import Image
 from rich.console import Console
 from rich.markdown import Markdown
 
-from docsearch.core import Page
+from docrag.core import Page
 
 console = Console()
 

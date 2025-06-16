@@ -4,14 +4,14 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools_scm]
 local_scheme = "no-local-version"
-version_file = "docsearch/_version.py"
+version_file = "docrag/_version.py"
 
 [project]
-name = "docsearch"
+name = "docrag"
 authors = [
     {name = "Logan Lang", email = "lllang@mix.wvu.edu"}
 ]
-description = "DocSearch: An advanced document search and retrieval system leveraging Retrieval-Augmented Generation for intelligent natural language search across PDF document collections."
+description = "DocRag: An advanced document search and retrieval system leveraging Retrieval-Augmented Generation for intelligent natural language search across PDF document collections."
 readme = {file = "README.md", content-type = "text/markdown"}
 requires-python = ">=3.8"
 keywords = ["rag", "search", "pdf", "llm", "retrieval", "documents", "vector", "embeddings"]
@@ -69,21 +69,20 @@ docs= [
 ]
 
 dev = [
-    "docsearch[dev,docs,tests]",
+    "docrag[dev,docs,tests]",
 ]
 
 [project.urls]
-Repository = "https://github.com/loganlang/DocSearch"
-Issues = "https://github.com/loganlang/DocSearch/issues"
-Documentation = "https://docs.docsearch.ai"
+Repository = "https://github.com/lllangWV/DocRag"
+Issues = "https://github.com/lllangWV/DocRag/issues"
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["docsearch*"]
-exclude = ["docsearch.tests*"]
+include = ["docrag*"]
+exclude = ["docrag.tests*"]
 
 [tool.setuptools.package-data]
-docsearch = ["**/*.json", "**/*.csv", "**/*.yml"]
+docrag = ["**/*.json", "**/*.csv", "**/*.yml"]
 
 [tool.black]
 line-length = 88

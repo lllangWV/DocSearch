@@ -9,8 +9,8 @@ from IPython.display import display
 from rich.console import Console
 from rich.markdown import Markdown
 
-from docsearch.core.page_layout import PageLayout
-from docsearch.figure_extraction import DocumentPageAnalyzer
+from docrag.core.page_layout import PageLayout
+from docrag.figure_extraction import DocumentPageAnalyzer
 
 console = Console()
 
@@ -26,7 +26,7 @@ for filepath in sample_filepaths:
     print(f"sample_filepath: {filepath}")
 
 
-from docsearch.core import Page
+from docrag.core import Page
 
 # page = Page.from_image(sample_filepaths[5], model_weights=MODEL_WEIGHTS)
 

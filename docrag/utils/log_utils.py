@@ -6,7 +6,7 @@ from datetime import datetime
 
 def set_verbose_level(verbose: int):
     user_logger = logging.getLogger("user")
-    package_logger = logging.getLogger("docsearch")
+    package_logger = logging.getLogger("docrag")
 
     if verbose == 0:
         user_logger.setLevel(logging.CRITICAL)
@@ -69,12 +69,12 @@ logging_config = {
         "file": {
             "class": "logging.FileHandler",
             "formatter": "simple",
-            "filename": "docsearch.log",
+            "filename": "docrag.log",
             "mode": "a",
         },
     },
     "loggers": {
-        "docsearch": {
+        "docrag": {
             "level": "ERROR",
             "handlers": ["console"],  # , "file"],
             "propagate": True,
