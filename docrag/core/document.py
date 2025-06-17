@@ -73,6 +73,7 @@ class Document:
     def __str__(self):
         return self.to_markdown()
 
+    @property
     def pages(self):
         return self._pages
 

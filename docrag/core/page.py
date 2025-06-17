@@ -249,7 +249,10 @@ def get_doclayout_model(
 
     model_weights = MODELS_DIR / "doclayout_yolo_docstructbench_imgsz1024.pt"
     model_name = model_weights.name
-    model_repo = "juliozhao/PageLayout-YOLO-PageStructBench"
+    model_repo = "juliozhao/DocLayout-YOLO-DocStructBench"
+    
+    logger.info(f"Model repo: {model_repo}")
+    logger.info(f"Model name: {model_name}")
     if (
         not model_weights.exists() or not model_weights.is_file()
     ):  # Check if dir exists and is not empty
@@ -261,7 +264,6 @@ def get_doclayout_model(
                 repo_id=model_repo,
                 filename=model_name,
                 local_dir=MODELS_DIR,
-                local_dir_use_symlinks=False,
             )
             logger.info("Model download complete.")
         except Exception as e:
