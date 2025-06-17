@@ -29,6 +29,8 @@ classifiers = [
 
 dynamic = ["version"]
 
+# Note: Using opencv-python-headless instead of opencv-python to avoid conflicts with doclayout-yolo
+# opencv-python-headless provides OpenCV without GUI dependencies
 dependencies = [
     "python-dotenv",
     "numpy",
@@ -42,9 +44,24 @@ dependencies = [
     "PyPDF2",
     "pdf2image",
     "Pillow",
+    "rich",
+    "pyarrow",
+    "aiolimiter",
+    "google-genai",
+    "opencv-python-headless",
+    "doclayout-yolo",
+    "huggingface_hub[hf_transfer,cli]",
 ]
 
 [project.optional-dependencies]
+
+vision = [
+    "opencv-python-headless",
+]
+
+vision-gui = [
+    "opencv-python",
+]
 
 tests = [
     "pytest",
