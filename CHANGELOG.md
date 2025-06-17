@@ -1,3 +1,22 @@
+# Release v0.0.3 (17-06-2025)
+
+This release includes various improvements and changes.
+
+##### Bugs
+- None identified
+
+##### New features
+- None identified
+
+##### Documentation updates
+- None identified
+
+##### Maintenance
+- Repository maintenance updates
+
+
+---
+
 # Release vRelease pr (17-06-2025)
 
 This release includes various improvements and changes.
