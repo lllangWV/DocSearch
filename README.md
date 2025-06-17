@@ -8,7 +8,7 @@ DocRag is an advanced document search and retrieval system that leverages Retrie
 pip install docrag
 ```
 
-## Getting Started 
+## Getting Started
 
 For a comprehensive tutorial on using DocSearch, check out our [Getting Started notebook](examples/01-Getting%20Started.ipynb) which covers:
 
