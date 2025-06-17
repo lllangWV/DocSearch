@@ -1,3 +1,22 @@
+# Release vRelease pr (17-06-2025)
+
+This release includes various improvements and changes.
+
+##### Bugs
+- None identified
+
+##### New features
+- None identified
+
+##### Documentation updates
+- None identified
+
+##### Maintenance
+- Repository maintenance updates
+
+
+---
+
 # Release v0.0.2 (16-06-2025)
 
 This release standardizes the project’s branding by renaming it from DocSearch to DocRag across all code and documentation. All references, links, installation instructions, and example usages have been updated to match the new project name.
