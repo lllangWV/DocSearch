@@ -12,7 +12,7 @@ from pdf2image import convert_from_path
 from PIL import Image
 
 from docrag.core import llm_processing
-from docrag.core.page import Page
+from docrag.core.page import Page, SerializationConfig
 
 logger = logging.getLogger(__name__)
 
@@ -203,17 +203,15 @@ class Document:
         return combined_markdown
 
     @staticmethod
-    def pyarrow_struct():
+    def pyarrow_struct(serialization_config: SerializationConfig):
         return pa.struct(
             [
-                pa.field("pages", pa.list_(Page.pyarrow_struct())),
+                pa.field("pages", pa.list_(Page.pyarrow_struct(serialization_config))),
                 pa.field("pdf_id", pa.str()),
             ]
         )
 
-    def to_dict(
-        self, include_images: bool = False, image_as_base64: bool = False, **kwargs
-    ) -> Dict:
+    def to_dict(self, serialization_config: SerializationConfig) -> Dict:
         """
         Convert document to dictionary format.
 
@@ -223,11 +221,7 @@ class Document:
         pages = []
         for page in self._pages:
             pages.append(
-                page.to_dict(
-                    include_images=include_images,
-                    image_as_base64=image_as_base64,
-                    **kwargs,
-                )
+                page.to_dict(serialization_config=serialization_config)
             )
         return {
             "pdf_id": self._pdf_id,
@@ -235,8 +229,8 @@ class Document:
             "pages": pages,
         }
 
-    def to_page_per_row(self):
-        pdf_dict = self.to_dict(include_images=True, image_as_base64=True)
+    def to_page_per_row(self, serialization_config: SerializationConfig = SerializationConfig()):
+        pdf_dict = self.to_dict(serialization_config=serialization_config)
         pydict = {
             "pdf_id": [],
             "pdf_path": [],
@@ -250,7 +244,7 @@ class Document:
             pydict["pdf_id"].append(pdf_dict["pdf_id"])
             pydict["pdf_path"].append(str(pdf_dict["pdf_path"]))
 
-        page_struct = Page.get_pyarrow_struct()
+        page_struct = Page.get_pyarrow_struct(serialization_config=serialization_config)
         pdf_struct = {
             "pdf_id": pa.int32(),
             "pdf_path": pa.string(),
@@ -262,9 +256,14 @@ class Document:
         table = pa.Table.from_pydict(pydict, schema=schema)
         return table
 
-    def to_pdf_per_row(self):
-        pdf_dict = self.to_dict(include_images=True, image_as_base64=True)
-        page_struct = Page.get_pyarrow_struct()
+    def to_pdf_per_row(self, include_page_image: bool = True, include_annotated_image: bool = True, include_element_images: bool = True):
+        pdf_dict = self.to_dict(include_page_image=include_page_image, 
+                                include_annotated_image=include_annotated_image, 
+                                include_element_images=include_element_images,
+                                image_as_base64=True)
+        page_struct = Page.get_pyarrow_struct(include_page_image=include_page_image, 
+                                              include_annotated_image=include_annotated_image, 
+                                              include_element_image=include_element_images)
 
         pdf_struct = {
             "pdf_id": pa.int32(),
@@ -275,11 +274,14 @@ class Document:
         table = pa.Table.from_pylist([pdf_dict], schema=schema)
         return table
 
-    def to_pyarrow(self, filepath: Union[str, Path] = None, page_per_row: bool = True):
+    def to_pyarrow(self, filepath: Union[str, Path] = None, 
+                   page_per_row: bool = True,
+                   serialization_config: SerializationConfig = SerializationConfig(),
+                   ):
         if page_per_row:
-            table = self.to_page_per_row()
+            table = self.to_page_per_row(serialization_config=serialization_config)
         else:
-            table = self.to_pdf_per_row()
+            table = self.to_pdf_per_row(serialization_config=serialization_config)
 
         if filepath:
             pq.write_table(table, filepath)

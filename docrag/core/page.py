@@ -17,268 +17,29 @@ from huggingface_hub import hf_hub_download
 from PIL import Image
 
 from docrag.core import llm_processing
+from docrag.core.page_element import PageElement, PageElementType
+from docrag.core.utils import pil_image_to_bytes
 from docrag.utils.config import MODELS_DIR
 
 logger = logging.getLogger(__name__)
 
 
-def pil_image_to_bytes(pil_image, format="PNG"):
-    """Converts a PIL Image to bytes in the specified format."""
-    if pil_image is None:
-        return None
-    img_byte_arr = io.BytesIO()
-    pil_image.save(img_byte_arr, format=format)
-    img_byte_arr = img_byte_arr.getvalue()
-    return img_byte_arr
-
-
-class ElementType(Enum):
-    """Type of element."""
-
-    FIGURE = "figure"
-    TABLE = "table"
-    FORMULA = "formula"
-    TEXT = "text"
-    TITLE = "title"
-    TABLE_CAPTION = "table_caption"
-    FORMULA_CAPTION = "formula_caption"
-    TABLE_FOOTNOTE = "table_footnote"
-    FIGURE_CAPTION = "figure_caption"
-    UNKNOWN = "unknown"
-
 
 @dataclass
-class Element:
-    """Metadata for an element."""
-
-    element_type: ElementType
-    confidence: float
-    bbox: List[int]
-    image: Image.Image
-    caption: Optional["Element"] = None
-    footnote: Optional["Element"] = None
-    markdown: str = ""
-    summary: str = ""
-
-    def to_markdown(
-        self,
-        include_caption=True,
-        include_summary=True,
-        include_footnote=True,
-    ):
-        tmp_str = ""
-        tmp_str += self.markdown
-        if include_caption and self.caption:
-            tmp_str += f"\n\n{self.caption.markdown}"
-        if include_footnote and self.footnote:
-            tmp_str += f"\n\n{self.footnote.markdown}"
-        if include_summary and self.summary:
-            tmp_str += f"\n\nSummary: {self.summary}"
-        return tmp_str
-
-    def to_dict(self, include_image: bool = False, image_as_base64: bool = False):
-
-        data = {
-            "element_type": self.element_type,
-            "confidence": self.confidence,
-            "bbox": self.bbox,
-            "markdown": self.markdown,
-            "summary": self.summary,
-            "caption": (
-                self.caption.to_dict(include_image, image_as_base64)
-                if self.caption
-                else None
-            ),
-            "footnote": (
-                self.footnote.to_dict(include_image, image_as_base64)
-                if self.footnote
-                else None
-            ),
-        }
-        if include_image:
-            if image_as_base64:
-                data["image"] = pil_image_to_bytes(self.image)
-            else:
-                data["image"] = self.image
-        return data
-
-    @classmethod
-    def from_dict(cls, data: Dict):
-        if not isinstance(data, dict):
-            raise ValueError("Data must be a dictionary")
-        if not "image" in data:
-            raise ValueError("Image not found in data")
-
-        if isinstance(data["image"], bytes):
-            data["image"] = Image.open(io.BytesIO(data["image"]))
-        if "caption" in data and data["caption"]:
-            data["caption"] = cls.from_dict(data["caption"])
-        if "footnote" in data and data["footnote"]:
-            data["footnote"] = cls.from_dict(data["footnote"])
-
-        return cls(**data)
-
-    @staticmethod
-    def get_pyarrow_struct(
-        include_captions: bool = True, include_footnotes: bool = True
-    ):
-        struct_dict = {
-            "element_type": pa.string(),
-            "confidence": pa.float32(),
-            "bbox": pa.list_(pa.int32()),
-            "image": pa.binary(),
-            "markdown": pa.string(),
-            "summary": pa.string(),
-        }
-        if include_captions:
-            struct_dict["caption"] = Element.get_pyarrow_struct(
-                include_captions=False, include_footnotes=False
-            )
-        if include_footnotes:
-            struct_dict["footnote"] = Element.get_pyarrow_struct(
-                include_captions=False, include_footnotes=False
-            )
-        return pa.struct(struct_dict)
-
-    @staticmethod
-    def get_pyarrow_empty_data(
-        include_captions: bool = True, include_footnotes: bool = True
-    ):
-        struct_dict = {
-            "element_type": None,
-            "confidence": None,
-            "bbox": None,
-            "image": None,
-            "markdown": None,
-            "summary": None,
-        }
-        if include_captions:
-            struct_dict["caption"] = Element.get_pyarrow_empty_data(
-                include_captions=False, include_footnotes=False
-            )
-        if include_footnotes:
-            struct_dict["footnote"] = Element.get_pyarrow_empty_data(
-                include_captions=False, include_footnotes=False
-            )
-        return struct_dict
-
-    async def parse_content(self, model=None, generate_config=None):
-        """Parse content based on element type."""
-        # Create tasks for parallel execution
-        tasks = []
-
-        # Main element parsing task
-        tasks.append(
-            self._parse_main_content(model=model, generate_config=generate_config)
-        )
-
-        # Caption parsing task
-        if self.caption is not None:
-            tasks.append(
-                self.caption._parse_caption_or_footnote(
-                    element=self.caption,
-                    model=model,
-                    generate_config=generate_config,
-                )
-            )
-
-        # Footnote parsing task
-        if self.footnote is not None:
-            tasks.append(
-                self.footnote._parse_caption_or_footnote(
-                    element=self.footnote,
-                    model=model,
-                    generate_config=generate_config,
-                )
-            )
-
-        # Execute all parsing tasks in parallel
-        await asyncio.gather(*tasks)
-
-        # Set results for caption/footnote (they handle their own assignment in _parse_main_content)
-
-    async def _parse_main_content(self, model=None, generate_config=None):
-        """Parse content based on element type."""
-        if self.element_type == ElementType.FIGURE.value:
-            result = await llm_processing.parse_figure(
-                self.image, model=model, generate_config=generate_config
-            )
-        elif self.element_type == ElementType.TABLE.value:
-            result = await llm_processing.parse_table(
-                self.image, model=model, generate_config=generate_config
-            )
-        elif self.element_type == ElementType.FORMULA.value:
-            result = await llm_processing.parse_formula(
-                self.image, model=model, generate_config=generate_config
-            )
-        elif self.element_type in [
-            ElementType.TEXT.value,
-            ElementType.TITLE.value,
-            ElementType.UNKNOWN.value,
-        ]:
-            result = await llm_processing.parse_text(
-                self.image, model=model, generate_config=generate_config
-            )
-
-        else:
-            result = await llm_processing.parse_text(
-                self.image, model=model, generate_config=generate_config
-            )
-
-        # Set parsed content for this element
-        self.markdown = result.get("md", "")
-        self.summary = result.get("summary", "")
-
-        return result
-
-    async def _parse_caption_or_footnote(self, element, model, generate_config):
-        """Helper method to parse caption or footnote element."""
-        result = await llm_processing.parse_text(
-            element.image, model=model, generate_config=generate_config
-        )
-        element.markdown = result.get("md", "")
-        element.summary = result.get("summary", "")
-
-
-def get_doclayout_model(
-    model_weights: str = "doclayout_yolo_docstructbench_imgsz1024.pt",
-):
-    model_weights = Path(model_weights)
-    if model_weights.exists():
-        return model_weights
-
-    model_weights = MODELS_DIR / "doclayout_yolo_docstructbench_imgsz1024.pt"
-    model_name = model_weights.name
-    model_repo = "juliozhao/DocLayout-YOLO-DocStructBench"
-    
-    logger.info(f"Model repo: {model_repo}")
-    logger.info(f"Model name: {model_name}")
-    if (
-        not model_weights.exists() or not model_weights.is_file()
-    ):  # Check if dir exists and is not empty
-        logger.info(
-            f"Model not found locally. Downloading from Hugging Face Hub: {model_repo}"
-        )
-        try:
-            hf_hub_download(
-                repo_id=model_repo,
-                filename=model_name,
-                local_dir=MODELS_DIR,
-            )
-            logger.info("Model download complete.")
-        except Exception as e:
-            logger.error(f"Failed to download model: {e}")
-            return model_weights
-
-    return model_weights
-
+class SerializationConfig:
+    include_page_image: bool = True
+    include_annotated_image: bool = True
+    include_element_images: bool = True
+    include_captions: bool = True
+    include_footnotes: bool = True
+    image_as_base64: bool = True
 
 class Page:
 
     def __init__(
         self,
         image: Image.Image,
-        elements: List[Element],
+        elements: List[PageElement],
         annotated_image: Image.Image = None,
         page_id: int = 0,
     ):
@@ -304,12 +65,12 @@ class Page:
     @property
     def elements_by_type(self):
         elements_by_type = {
-            ElementType.FIGURE.value: [],
-            ElementType.TABLE.value: [],
-            ElementType.FORMULA.value: [],
-            ElementType.TEXT.value: [],
-            ElementType.TITLE.value: [],
-            ElementType.UNKNOWN.value: [],
+            PageElementType.FIGURE.value: [],
+            PageElementType.TABLE.value: [],
+            PageElementType.FORMULA.value: [],
+            PageElementType.TEXT.value: [],
+            PageElementType.TITLE.value: [],
+            PageElementType.UNKNOWN.value: [],
         }
         for element in self._elements:
             element_type = element.element_type
@@ -318,27 +79,27 @@ class Page:
 
     @property
     def tables(self):
-        return self.elements_by_type[ElementType.TABLE.value]
+        return self.elements_by_type[PageElementType.TABLE.value]
 
     @property
     def figures(self):
-        return self.elements_by_type[ElementType.FIGURE.value]
+        return self.elements_by_type[PageElementType.FIGURE.value]
 
     @property
     def formulas(self):
-        return self.elements_by_type[ElementType.FORMULA.value]
+        return self.elements_by_type[PageElementType.FORMULA.value]
 
     @property
     def text(self):
-        return self.elements_by_type[ElementType.TEXT.value]
+        return self.elements_by_type[PageElementType.TEXT.value]
 
     @property
     def titles(self):
-        return self.elements_by_type[ElementType.TITLE.value]
+        return self.elements_by_type[PageElementType.TITLE.value]
 
     @property
     def unknown(self):
-        return self.elements_by_type[ElementType.UNKNOWN.value]
+        return self.elements_by_type[PageElementType.UNKNOWN.value]
 
     @property
     def markdown(self):
@@ -450,11 +211,11 @@ class Page:
             include_summary_by_type = {
                 element_type: True for element_type in element_types
             }
-            include_summary_by_type[ElementType.TITLE.value] = False
-            include_summary_by_type[ElementType.TEXT.value] = False
-            include_summary_by_type[ElementType.UNKNOWN.value] = False
-            include_summary_by_type[ElementType.FORMULA.value] = False
-            include_summary_by_type[ElementType.TABLE.value] = False
+            include_summary_by_type[PageElementType.TITLE.value] = False
+            include_summary_by_type[PageElementType.TEXT.value] = False
+            include_summary_by_type[PageElementType.UNKNOWN.value] = False
+            include_summary_by_type[PageElementType.FORMULA.value] = False
+            include_summary_by_type[PageElementType.TABLE.value] = False
         if include_footnote_by_type is None:
             include_footnote_by_type = {
                 element_type: True for element_type in element_types
@@ -488,22 +249,31 @@ class Page:
         return tmp_str
 
     @staticmethod
-    def get_pyarrow_struct():
-        element_struct = Element.get_pyarrow_struct()
+    def get_pyarrow_struct(serialization_config: SerializationConfig):
+        element_struct = PageElement.get_pyarrow_struct(
+            include_image=serialization_config.include_element_images,
+            include_captions=serialization_config.include_captions,
+            include_footnotes=serialization_config.include_footnotes,
+        )
 
         page_struct = {
             "markdown": pa.string(),
             "elements": pa.list_(element_struct),
-            "image": pa.binary(),
-            "annotated_image": pa.binary(),
             "page_id": pa.int32(),
         }
+        if serialization_config.include_page_image:
+            page_struct["image"] = pa.binary()
+        if serialization_config.include_annotated_image:
+            page_struct["annotated_image"] = pa.binary()
 
         return pa.struct(page_struct)
 
-    def to_pyarrow(self, filepath: Union[str, Path] = None):
-        page_struct = Page.get_pyarrow_struct()
-        data = [self.to_dict(include_images=True, image_as_base64=True)]
+    def to_pyarrow(self, filepath: Union[str, Path] = None, 
+                   serialization_config: SerializationConfig = SerializationConfig(),
+                   ):
+        page_struct = Page.get_pyarrow_struct(serialization_config=serialization_config)
+        data = [self.to_dict(serialization_config=serialization_config)
+                ]
         page_schema = pa.schema(page_struct)
         table = pa.Table.from_pylist(data, schema=page_schema)
 
@@ -511,24 +281,24 @@ class Page:
             pq.write_table(table, filepath)
         return table
 
-    def to_dict(self, include_images: bool = False, image_as_base64: bool = False):
+    def to_dict(self, serialization_config: SerializationConfig):
         data = {
             "markdown": self.to_markdown(),
             "elements": [
                 element.to_dict(
-                    include_image=include_images, image_as_base64=image_as_base64
+                    include_image=serialization_config.include_element_images, image_as_base64=serialization_config.image_as_base64
                 )
                 for element in self._elements
             ],
             "page_id": self._page_id,
         }
-        if include_images:
-            if image_as_base64:
-                data["image"] = pil_image_to_bytes(self._image)
-                data["annotated_image"] = pil_image_to_bytes(self._annotated_image)
-            else:
-                data["image"] = self._image
-                data["annotated_image"] = self._annotated_image
+        
+        if serialization_config.include_page_image:
+            data["image"] = pil_image_to_bytes(self._image) if serialization_config.image_as_base64 else self._image
+        
+        if serialization_config.include_annotated_image:
+            data["annotated_image"] = pil_image_to_bytes(self._annotated_image) if serialization_config.image_as_base64 else self._annotated_image
+     
         return data
 
     def to_json(
@@ -560,8 +330,8 @@ class Page:
         if not isinstance(data, dict):
             raise ValueError("Data must be a dictionary")
         if not "elements" in data:
-            raise ValueError("Elements not found in data")
-        elements = [Element.from_dict(element) for element in data["elements"]]
+            raise ValueError("PageElements not found in data")
+        elements = [PageElement.from_dict(element) for element in data["elements"]]
         image = None
         annotated_image = None
         if "image" in data:
@@ -588,7 +358,7 @@ class Page:
     @classmethod
     async def parse(
         cls,
-        elements: List[Element],
+        elements: List[PageElement],
         model=llm_processing.MODELS[2],
         generate_config: Dict = None,
     ):
@@ -729,7 +499,7 @@ class Page:
         image_size=1024,
         confidence_threshold=0.2,
         device="cpu",
-    ) -> Dict[ElementType, List[Element]]:
+    ) -> Dict[PageElementType, List[PageElement]]:
         """Process each detection and create element info."""
 
         model_weights = get_doclayout_model(model_weights)
@@ -744,16 +514,16 @@ class Page:
         )
 
         class_element_type_map = {
-            "figure": ElementType.FIGURE.value,
-            "table": ElementType.TABLE.value,
-            "isolate_formula": ElementType.FORMULA.value,
-            "plain text": ElementType.TEXT.value,
-            "title": ElementType.TITLE.value,
-            "table_caption": ElementType.TABLE_CAPTION.value,
-            "formula_caption": ElementType.FORMULA_CAPTION.value,
-            "figure_caption": ElementType.FIGURE_CAPTION.value,
-            "table_footnote": ElementType.TABLE_FOOTNOTE.value,
-            "abandon": ElementType.UNKNOWN.value,
+            "figure": PageElementType.FIGURE.value,
+            "table": PageElementType.TABLE.value,
+            "isolate_formula": PageElementType.FORMULA.value,
+            "plain text": PageElementType.TEXT.value,
+            "title": PageElementType.TITLE.value,
+            "table_caption": PageElementType.TABLE_CAPTION.value,
+            "formula_caption": PageElementType.FORMULA_CAPTION.value,
+            "figure_caption": PageElementType.FIGURE_CAPTION.value,
+            "table_footnote": PageElementType.TABLE_FOOTNOTE.value,
+            "abandon": PageElementType.UNKNOWN.value,
         }
 
         results = det_res[0]
@@ -791,7 +561,7 @@ class Page:
             cropped_element = image.crop((x1, y1, x2, y2))
 
             # Create element info
-            element = Element(
+            element = PageElement(
                 element_type=element_type,
                 confidence=confidence,
                 bbox=[x1, y1, x2, y2],
@@ -813,7 +583,7 @@ class Page:
         return elements, annotated_image
 
     @staticmethod
-    def _match_captions_and_footnotes(elements: Dict[ElementType, List[Element]]):
+    def _match_captions_and_footnotes(elements: Dict[PageElementType, List[PageElement]]):
         """Find and store caption and footnote boxes."""
 
         table_captions = []
@@ -824,19 +594,19 @@ class Page:
         new_elements = []
         # Separate caption and footnote elements
         for element in elements:
-            if element.element_type == ElementType.TABLE_CAPTION.value:
+            if element.element_type == PageElementType.TABLE_CAPTION.value:
                 table_captions.append(element)
-            elif element.element_type == ElementType.TABLE_FOOTNOTE.value:
+            elif element.element_type == PageElementType.TABLE_FOOTNOTE.value:
                 table_footnotes.append(element)
-            elif element.element_type == ElementType.FIGURE_CAPTION.value:
+            elif element.element_type == PageElementType.FIGURE_CAPTION.value:
                 figure_captions.append(element)
-            elif element.element_type == ElementType.FORMULA_CAPTION.value:
+            elif element.element_type == PageElementType.FORMULA_CAPTION.value:
                 formula_captions.append(element)
             else:
                 new_elements.append(element)
         # Match captions and footnotes to elements
         for element in new_elements:
-            if element.element_type == ElementType.TABLE.value:
+            if element.element_type == PageElementType.TABLE.value:
                 best_caption_neighbor_element, table_captions = (
                     find_nearest_neighbor_element(element, table_captions)
                 )
@@ -845,11 +615,11 @@ class Page:
                 )
                 element.caption = best_caption_neighbor_element
                 element.footnote = best_footnote_neighbor_element
-            elif element.element_type == ElementType.FORMULA.value:
+            elif element.element_type == PageElementType.FORMULA.value:
                 best_caption_neighbor_element, formula_captions = (
                     find_nearest_neighbor_element(element, formula_captions)
                 )
-            elif element.element_type == ElementType.FIGURE.value:
+            elif element.element_type == PageElementType.FIGURE.value:
                 best_caption_neighbor_element, figure_captions = (
                     find_nearest_neighbor_element(element, figure_captions)
                 )
@@ -866,10 +636,10 @@ class Page:
 
 
 def find_nearest_neighbor_element(
-    element: Element,
-    neighbor_elements: List[Element],
+    element: PageElement,
+    neighbor_elements: List[PageElement],
     max_distance: float = 100,
-) -> Optional[Element]:
+) -> Optional[PageElement]:
     """Find the nearest caption to a given element based on proximity and vertical alignment."""
 
     if len(neighbor_elements) == 0:
@@ -911,61 +681,176 @@ def find_nearest_neighbor_element(
     return best_neighbor_element, neighbor_elements
 
 
+
+
+def get_doclayout_model(
+    model_weights: str = "doclayout_yolo_docstructbench_imgsz1024.pt",
+):
+    model_weights = Path(model_weights)
+    if model_weights.exists():
+        return model_weights
+
+    model_weights = MODELS_DIR / "doclayout_yolo_docstructbench_imgsz1024.pt"
+    model_name = model_weights.name
+    model_repo = "juliozhao/DocLayout-YOLO-DocStructBench"
+    
+    logger.info(f"Model repo: {model_repo}")
+    logger.info(f"Model name: {model_name}")
+    if (
+        not model_weights.exists() or not model_weights.is_file()
+    ):  # Check if dir exists and is not empty
+        logger.info(
+            f"Model not found locally. Downloading from Hugging Face Hub: {model_repo}"
+        )
+        try:
+            hf_hub_download(
+                repo_id=model_repo,
+                filename=model_name,
+                local_dir=MODELS_DIR,
+            )
+            logger.info("Model download complete.")
+        except Exception as e:
+            logger.error(f"Failed to download model: {e}")
+            return model_weights
+
+    return model_weights
+
+def projection_by_bboxes(boxes: np.array, axis: int) -> np.ndarray:
+    """
+    Args:
+        boxes: [N, 4]
+        axis: 
+
+    Returns:
+        1D 
+
+    """
+    assert axis in [0, 1]
+    length = np.max(boxes[:, axis::2])
+    res = np.zeros(length, dtype=int)
+    # TODO: how to remove for loop?
+    for start, end in boxes[:, axis::2]:
+        res[start:end] += 1
+    return res
+
+
+
+
+def split_projection_profile(arr_values: np.array, min_value: float, min_gap: float):
+    """Split projection profile:
+
+    ```
+                              ┌──┐
+         arr_values           │  │       ┌─┐───
+             ┌──┐             │  │       │ │ |
+             │  │             │  │ ┌───┐ │ │min_value
+             │  │<- min_gap ->│  │ │   │ │ │ |
+         ────┴──┴─────────────┴──┴─┴───┴─┴─┴─┴───
+         0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16
+    ```
+
+    Args:
+        arr_values (np.array): 1-d array representing the projection profile.
+        min_value (float): Ignore the profile if `arr_value` is less than `min_value`.
+        min_gap (float): Ignore the gap if less than this value.
+
+    Returns:
+        tuple: Start indexes and end indexes of split groups.
+    """
+    # all indexes with projection height exceeding the threshold
+    arr_index = np.where(arr_values > min_value)[0]
+    if not len(arr_index):
+        return
+
+    # find zero intervals between adjacent projections
+    # |  |                    ||
+    # ||||<- zero-interval -> |||||
+    arr_diff = arr_index[1:] - arr_index[0:-1]
+    arr_diff_index = np.where(arr_diff > min_gap)[0]
+    arr_zero_intvl_start = arr_index[arr_diff_index]
+    arr_zero_intvl_end = arr_index[arr_diff_index + 1]
+
+    # convert to index of projection range:
+    # the start index of zero interval is the end index of projection
+    arr_start = np.insert(arr_zero_intvl_end, 0, arr_index[0])
+    arr_end = np.append(arr_zero_intvl_start, arr_index[-1])
+    arr_end += 1  # end index will be excluded as index slice
+
+    return arr_start, arr_end
+
+def recursive_xy_cut(boxes: np.ndarray, indices: List[int], res: List[int]):
+    """
+
+    Args:
+        boxes: (N, 4)
+        indices: 
+        res: 
+
+    """
+
+    assert len(boxes) == len(indices)
+
+    _indices = boxes[:, 1].argsort()
+    y_sorted_boxes = boxes[_indices]
+    y_sorted_indices = indices[_indices]
+
+
+
+    y_projection = projection_by_bboxes(boxes=y_sorted_boxes, axis=1)
+    pos_y = split_projection_profile(y_projection, 0, 1)
+    if not pos_y:
+        return
+
+    arr_y0, arr_y1 = pos_y
+    for r0, r1 in zip(arr_y0, arr_y1):
+
+        _indices = (r0 <= y_sorted_boxes[:, 1]) & (y_sorted_boxes[:, 1] < r1)
+
+        y_sorted_boxes_chunk = y_sorted_boxes[_indices]
+        y_sorted_indices_chunk = y_sorted_indices[_indices]
+
+        _indices = y_sorted_boxes_chunk[:, 0].argsort()
+        x_sorted_boxes_chunk = y_sorted_boxes_chunk[_indices]
+        x_sorted_indices_chunk = y_sorted_indices_chunk[_indices]
+
+
+        x_projection = projection_by_bboxes(boxes=x_sorted_boxes_chunk, axis=0)
+        pos_x = split_projection_profile(x_projection, 0, 1)
+        if not pos_x:
+            continue
+
+        arr_x0, arr_x1 = pos_x
+        if len(arr_x0) == 1:
+ 
+            res.extend(x_sorted_indices_chunk)
+            continue
+
+        for c0, c1 in zip(arr_x0, arr_x1):
+            _indices = (c0 <= x_sorted_boxes_chunk[:, 0]) & (
+                x_sorted_boxes_chunk[:, 0] < c1
+            )
+            recursive_xy_cut(
+                x_sorted_boxes_chunk[_indices], x_sorted_indices_chunk[_indices], res
+            )
+
+
+
 def find_element_logical_reading_order(
-    elements: List[Element], image: Image.Image
+    elements: List[PageElement], image: Image.Image, half_width_threshold: float = 0.50
 ) -> List[int]:
     """Sort elements by logical reading order: multi-column elements by x then y,
     with full-width elements inserted based on y-coordinate."""
-
+    from scipy.cluster.vq import kmeans, vq
     if not elements:
         return []
 
     # Calculate center coordinates and width for each element
-    original_width, original_height = image.size
-
-    element_info = []
+    element_bboxes=[]
     for i, element in enumerate(elements):
-        element_box = element.bbox
-        element_center_x = (element_box[0] + element_box[2]) / 2
-        element_center_y = (element_box[1] + element_box[3]) / 2
-        element_width = element_box[2] - element_box[0]
-        element_info.append((i, element_center_x, element_center_y, element_width))
+        element_bboxes.append(element.bbox)
 
-    # Separate elements into full-width and column elements
-    full_width_elements = []
-    column_elements = []
+    res=[]
+    recursive_xy_cut(np.array(element_bboxes), np.arange(len(element_bboxes)), res)
+    return res
 
-    for i, center_x, center_y, width in element_info:
-        if width > original_width * 0.55:  # If element spans >55% of page width
-            full_width_elements.append((i, center_y))
-        else:
-            column_elements.append((i, center_x, center_y))
 
-    # Sort column elements by x coordinate first, then y coordinate
-    column_elements.sort(key=lambda x: (x[1], x[2]))  # Sort by x then y
-
-    # Sort full-width elements by y coordinate
-    full_width_elements.sort(key=lambda x: x[1])  # Sort by y
-
-    # Create the final sorted list by interleaving based on y-coordinates
-    result_indices = []
-    column_idx = 0
-    full_width_idx = 0
-
-    while column_idx < len(column_elements) or full_width_idx < len(
-        full_width_elements
-    ):
-        # Check if we should insert a full-width element
-        if full_width_idx < len(full_width_elements) and (
-            column_idx >= len(column_elements)
-            or full_width_elements[full_width_idx][1] <= column_elements[column_idx][2]
-        ):
-            # Insert full-width element
-            result_indices.append(full_width_elements[full_width_idx][0])
-            full_width_idx += 1
-        else:
-            # Insert column element
-            result_indices.append(column_elements[column_idx][0])
-            column_idx += 1
-
-    return result_indices
